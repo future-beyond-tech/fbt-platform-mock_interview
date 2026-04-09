@@ -1,0 +1,156 @@
+/* ═══════════════════════════════════════════════════════════════
+   Design Tokens — Phase 1 Foundation
+   Single source of truth for color, spacing, type, radius, motion.
+   Additive: existing legacy tokens in index.css remain for back-compat.
+   New component code should consume --t-* tokens only.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Color · Surface ───────────────────────── */
+  --t-surface-0: #0a0a12;
+  --t-surface-1: #0f0f1a;
+  --t-surface-2: #161625;
+  --t-surface-3: #1e1e32;
+  --t-surface-4: #262640;
+  --t-surface-glass: rgba(22, 22, 37, 0.85);
+  --t-surface-scrim: rgba(0, 0, 0, 0.55);
+
+  /* ── Color · Text ──────────────────────────── */
+  --t-text-primary:   #e8e8f0;
+  --t-text-secondary: #b4b4cc;
+  --t-text-muted:     #9a9ab5;
+  --t-text-disabled:  #5a5a75;
+  --t-text-inverse:   #0a0a12;
+
+  /* ── Color · Border ────────────────────────── */
+  --t-border-subtle: rgba(255, 255, 255, 0.06);
+  --t-border-default: rgba(255, 255, 255, 0.10);
+  --t-border-strong: rgba(255, 255, 255, 0.18);
+
+  /* ── Color · Brand / Accent ───────────────── */
+  --t-accent:       #64ffda;
+  --t-accent-hover: #7dffe1;
+  --t-accent-press: #4de6c2;
+  --t-accent-soft:  rgba(100, 255, 218, 0.15);
+  --t-accent-glow:  rgba(100, 255, 218, 0.08);
+  --t-on-accent:    #0a0a12;
+
+  /* ── Color · Feedback ─────────────────────── */
+  --t-success:      #4ade80;
+  --t-success-soft: rgba(74, 222, 128, 0.14);
+  --t-warning:      #ffd93d;
+  --t-warning-soft: rgba(255, 217, 61, 0.14);
+  --t-danger:       #ff6b6b;
+  --t-danger-soft:  rgba(255, 107, 107, 0.12);
+  --t-info:         #3B82F6;
+  --t-info-soft:    rgba(59, 130, 246, 0.14);
+
+  /* ── Focus ring (WCAG 2.2 AA) ─────────────── */
+  --t-focus-ring: 0 0 0 2px var(--t-surface-0), 0 0 0 4px var(--t-accent);
+  --t-focus-ring-width: 2px;
+  --t-focus-ring-offset: 2px;
+  --t-focus-ring-color: var(--t-accent);
+
+  /* ── Spacing · 4pt base, 8pt rhythm ───────── */
+  --t-space-0:  0;
+  --t-space-1:  4px;
+  --t-space-2:  8px;
+  --t-space-3:  12px;
+  --t-space-4:  16px;
+  --t-space-5:  20px;
+  --t-space-6:  24px;
+  --t-space-7:  32px;
+  --t-space-8:  40px;
+  --t-space-9:  48px;
+  --t-space-10: 64px;
+  --t-space-11: 80px;
+
+  /* ── Typography · ramp ────────────────────── */
+  --t-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --t-font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+
+  --t-font-size-xs:      12px;
+  --t-font-size-sm:      13px;
+  --t-font-size-base:    15px;
+  --t-font-size-md:      16px;
+  --t-font-size-lg:      18px;
+  --t-font-size-xl:      20px;
+  --t-font-size-h3:      22px;
+  --t-font-size-h2:      26px;
+  --t-font-size-h1:      32px;
+  --t-font-size-display: 40px;
+
+  --t-line-tight:  1.2;
+  --t-line-snug:   1.35;
+  --t-line-normal: 1.5;
+  --t-line-relaxed: 1.7;
+
+  --t-weight-regular: 400;
+  --t-weight-medium:  500;
+  --t-weight-semibold: 600;
+  --t-weight-bold:    700;
+
+  --t-tracking-tight: -0.02em;
+  --t-tracking-normal: 0;
+  --t-tracking-wide:  0.04em;
+  --t-tracking-caps:  0.08em;
+
+  /* ── Radius ───────────────────────────────── */
+  --t-radius-xs:   4px;
+  --t-radius-sm:   6px;
+  --t-radius-md:   8px;
+  --t-radius-lg:   12px;
+  --t-radius-xl:   16px;
+  --t-radius-2xl:  20px;
+  --t-radius-pill: 999px;
+
+  /* ── Shadow (3 elevations) ────────────────── */
+  --t-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --t-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.2);
+  --t-shadow-3: 0 16px 40px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --t-shadow-glow: 0 0 24px var(--t-accent-glow);
+
+  /* ── Motion ───────────────────────────────── */
+  --t-motion-instant: 0ms;
+  --t-motion-fast:    120ms;
+  --t-motion-base:    180ms;
+  --t-motion-slow:    260ms;
+  --t-motion-slower:  400ms;
+
+  --t-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --t-ease-emphasis: cubic-bezier(0.3, 0, 0, 1);
+  --t-ease-out:      cubic-bezier(0, 0, 0.2, 1);
+  --t-ease-in:       cubic-bezier(0.4, 0, 1, 1);
+
+  /* ── Z-Index scale ────────────────────────── */
+  --t-z-base:     0;
+  --t-z-raised:   10;
+  --t-z-sticky:   100;
+  --t-z-overlay:  500;
+  --t-z-drawer:   800;
+  --t-z-modal:    900;
+  --t-z-toast:    1000;
+  --t-z-tooltip:  1100;
+
+  /* ── Layout ───────────────────────────────── */
+  --t-content-width-narrow: 560px;
+  --t-content-width:        720px;
+  --t-content-width-wide:   960px;
+  --t-tap-target-min:       44px;
+
+  /* ── Breakpoints (for JS; media queries still literal) ── */
+  --t-bp-sm: 640px;
+  --t-bp-md: 1024px;
+  --t-bp-lg: 1280px;
+}
+
+/* Honor user's OS-level reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-motion-instant: 0ms;
+    --t-motion-fast:    0ms;
+    --t-motion-base:    0ms;
+    --t-motion-slow:    0ms;
+    --t-motion-slower:  0ms;
+  }
+}

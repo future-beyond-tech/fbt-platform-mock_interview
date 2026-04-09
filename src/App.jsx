@@ -1,13 +1,17 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { fetchQuestions, fetchProviders, evaluateAnswer, generateQuestions, startInterview, healthCheck } from './api';
 import { useSettings } from './hooks/useSettings';
-import Particles from './components/Particles';
 import StatusBar from './components/StatusBar';
-import SettingsDrawer from './components/SettingsDrawer';
-import SessionScreen from './components/SessionScreen';
-import DoneScreen from './components/DoneScreen';
 import UploadPage from './components/UploadPage';
-import InterviewSession from './components/InterviewSession';
+import { Alert, Button, LaunchLoader, SessionScreenSkeleton } from './components/ui';
+
+// Lazy-load heavy, non-critical route chunks so initial FCP/LCP paints
+// structure-only (no canvas, no interview session, no score reveal).
+const Particles         = lazy(() => import('./components/Particles'));
+const SettingsDrawer    = lazy(() => import('./components/SettingsDrawer'));
+const SessionScreen     = lazy(() => import('./components/SessionScreen'));
+const DoneScreen        = lazy(() => import('./components/DoneScreen'));
+const InterviewSession  = lazy(() => import('./components/InterviewSession'));
 
 function getStats(history) {
   const ans = history.filter(h => h.verdict !== 'skipped');
@@ -274,62 +278,89 @@ export default function App() {
 
   const stats = getStats(s.history);
 
+  const dismissError = useCallback(
+    () => setS(prev => ({ ...prev, errorMessage: '' })),
+    [],
+  );
+
   return (
     <div className="app">
-      <Particles />
+      <Suspense fallback={null}>
+        <Particles />
+      </Suspense>
+
+      <a className="t-skip-link" href="#main-content">Skip to main content</a>
 
       <div className="app-content">
-        <div className="app-header">
+        <header className="app-header">
           <StatusBar
             provider={currentProvider}
             settings={settings}
             health={s.health}
             onOpenSettings={openSettings}
           />
-        </div>
+        </header>
 
-        {s.loading && (
-          <div className="loading">
-            <div className="think-dots"><span /><span /><span /></div>
-            <p>Connecting...</p>
+        <main id="main-content" className="app-main t-anim-fade" tabIndex={-1}>
+        {s.errorMessage && (
+          <div className="app-alert-slot">
+            <Alert
+              tone="danger"
+              title="Something went wrong"
+              actions={
+                <Button variant="secondary" size="sm" onClick={() => void loadInitialData()}>
+                  Retry
+                </Button>
+              }
+            >
+              {s.errorMessage}
+            </Alert>
+            <button type="button" className="t-sr-only" onClick={dismissError}>Dismiss error</button>
           </div>
         )}
+
+        {s.loading && <LaunchLoader label="Preparing your interview" />}
 
         {!s.loading && s.phase === 'start' && (
           <UploadPage onGenerateFromFile={startFileSession} />
         )}
         {!s.loading && s.phase === 'interview' && s.interviewSession && (
-          <InterviewSession
-            sessionId={s.interviewSession.sessionId}
-            initialQuestion={s.interviewSession.question}
-            initialSection={s.interviewSession.section}
-            initialState={s.interviewSession.state}
-            initialProfile={s.interviewSession.profile}
-            settings={settings}
-            groqApiKey={settings.provider === 'groq' ? settings.apiKey : (import.meta.env.VITE_GROQ_API_KEY || '')}
-            onGoStart={() => setS(prev => ({ ...prev, phase: 'start', interviewSession: null }))}
-            onComplete={() => setS(prev => ({ ...prev, phase: 'start', interviewSession: null }))}
-          />
+          <Suspense fallback={<SessionScreenSkeleton />}>
+            <InterviewSession
+              sessionId={s.interviewSession.sessionId}
+              initialQuestion={s.interviewSession.question}
+              initialSection={s.interviewSession.section}
+              initialState={s.interviewSession.state}
+              initialProfile={s.interviewSession.profile}
+              settings={settings}
+              groqApiKey={settings.provider === 'groq' ? settings.apiKey : (import.meta.env.VITE_GROQ_API_KEY || '')}
+              onGoStart={() => setS(prev => ({ ...prev, phase: 'start', interviewSession: null }))}
+              onComplete={() => setS(prev => ({ ...prev, phase: 'start', interviewSession: null }))}
+            />
+          </Suspense>
         )}
         {!s.loading && s.phase === 'done' && (
-          <DoneScreen
-            stats={stats}
-            onNewSession={goStart}
-            onRetry={() => setS(prev => ({
-              ...prev,
-              phase: 'question',
-              session: prev.retrySession,
-              idx: 0,
-              history: [],
-              attempts: 0,
-              draftAnswer: '',
-              submittedAnswer: '',
-              result: null,
-              showIdeal: false,
-            }))}
-          />
+          <Suspense fallback={<SessionScreenSkeleton />}>
+            <DoneScreen
+              stats={stats}
+              onNewSession={goStart}
+              onRetry={() => setS(prev => ({
+                ...prev,
+                phase: 'question',
+                session: prev.retrySession,
+                idx: 0,
+                history: [],
+                attempts: 0,
+                draftAnswer: '',
+                submittedAnswer: '',
+                result: null,
+                showIdeal: false,
+              }))}
+            />
+          </Suspense>
         )}
         {!s.loading && ['question', 'thinking', 'result'].includes(s.phase) && (
+          <Suspense fallback={<SessionScreenSkeleton />}>
           <SessionScreen
             session={s.session}
             idx={s.idx}
@@ -349,16 +380,22 @@ export default function App() {
             onGoStart={goStart}
             groqApiKey={settings.provider === 'groq' ? settings.apiKey : ''}
           />
+          </Suspense>
         )}
+        </main>
       </div>
 
-      <SettingsDrawer
-        open={s.settingsOpen}
-        onClose={closeSettings}
-        settings={settings}
-        onUpdate={updateSettings}
-        providers={s.providers}
-      />
+      {s.settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsDrawer
+            open={s.settingsOpen}
+            onClose={closeSettings}
+            settings={settings}
+            onUpdate={updateSettings}
+            providers={s.providers}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

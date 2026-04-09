@@ -1,0 +1,268 @@
+/* ═══════════════════════════════════════════════════════════════
+   Phase 4 — Polish
+   Light theme, microinteractions, empty states, responsive pass.
+   Fully additive. Consumes tokens only. No functionality changes.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────
+   1 · Light theme token overrides
+   Triggered by OS preference or explicit data-theme="light"
+   ────────────────────────────────────────────── */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --t-surface-0: #f7f7fb;
+    --t-surface-1: #ffffff;
+    --t-surface-2: #f0f0f7;
+    --t-surface-3: #e4e4ef;
+    --t-surface-4: #d5d5e4;
+    --t-surface-glass: rgba(255, 255, 255, 0.85);
+    --t-surface-scrim: rgba(15, 15, 26, 0.45);
+
+    --t-text-primary:   #0f1020;
+    --t-text-secondary: #353651;
+    --t-text-muted:     #60617a;
+    --t-text-disabled:  #9a9ab5;
+    --t-text-inverse:   #ffffff;
+
+    --t-border-subtle:  rgba(15, 16, 32, 0.06);
+    --t-border-default: rgba(15, 16, 32, 0.12);
+    --t-border-strong:  rgba(15, 16, 32, 0.22);
+
+    --t-accent:       #0ea47e;
+    --t-accent-hover: #13b88d;
+    --t-accent-press: #0a8a69;
+    --t-accent-soft:  rgba(14, 164, 126, 0.12);
+    --t-accent-glow:  rgba(14, 164, 126, 0.14);
+    --t-on-accent:    #ffffff;
+
+    --t-success:      #16a34a;
+    --t-success-soft: rgba(22, 163, 74, 0.12);
+    --t-warning:      #b8860b;
+    --t-warning-soft: rgba(184, 134, 11, 0.12);
+    --t-danger:       #dc2626;
+    --t-danger-soft:  rgba(220, 38, 38, 0.10);
+    --t-info:         #2563eb;
+    --t-info-soft:    rgba(37, 99, 235, 0.10);
+
+    --t-shadow-1: 0 1px 2px rgba(15, 16, 32, 0.06), 0 1px 3px rgba(15, 16, 32, 0.08);
+    --t-shadow-2: 0 4px 12px rgba(15, 16, 32, 0.08), 0 2px 4px rgba(15, 16, 32, 0.06);
+    --t-shadow-3: 0 16px 40px rgba(15, 16, 32, 0.14), 0 4px 12px rgba(15, 16, 32, 0.08);
+  }
+}
+
+/* Explicit opt-in overrides OS preference */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --t-surface-0: #f7f7fb;
+  --t-surface-1: #ffffff;
+  --t-surface-2: #f0f0f7;
+  --t-surface-3: #e4e4ef;
+  --t-surface-4: #d5d5e4;
+  --t-surface-glass: rgba(255, 255, 255, 0.85);
+
+  --t-text-primary:   #0f1020;
+  --t-text-secondary: #353651;
+  --t-text-muted:     #60617a;
+  --t-text-disabled:  #9a9ab5;
+  --t-text-inverse:   #ffffff;
+
+  --t-border-subtle:  rgba(15, 16, 32, 0.06);
+  --t-border-default: rgba(15, 16, 32, 0.12);
+  --t-border-strong:  rgba(15, 16, 32, 0.22);
+
+  --t-accent:       #0ea47e;
+  --t-accent-hover: #13b88d;
+  --t-accent-press: #0a8a69;
+  --t-accent-soft:  rgba(14, 164, 126, 0.12);
+  --t-accent-glow:  rgba(14, 164, 126, 0.14);
+  --t-on-accent:    #ffffff;
+}
+
+/* ──────────────────────────────────────────────
+   2 · Microinteractions
+   ────────────────────────────────────────────── */
+
+/* Reusable mount animations (honor reduced motion via tokens) */
+@keyframes t-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes t-scale-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes t-slide-up-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.t-anim-fade    { animation: t-fade-in      var(--t-motion-base) var(--t-ease-out) both; }
+.t-anim-scale   { animation: t-scale-in     var(--t-motion-base) var(--t-ease-out) both; }
+.t-anim-slideup { animation: t-slide-up-in  var(--t-motion-slow) var(--t-ease-standard) both; }
+
+/* Button press / hover refinement */
+.t-btn {
+  will-change: transform;
+  transition:
+    background var(--t-motion-fast) var(--t-ease-out),
+    border-color var(--t-motion-fast) var(--t-ease-out),
+    color var(--t-motion-fast) var(--t-ease-out),
+    transform var(--t-motion-fast) var(--t-ease-out),
+    box-shadow var(--t-motion-base) var(--t-ease-out);
+}
+.t-btn--primary:hover:not(:disabled) { box-shadow: var(--t-shadow-2), var(--t-shadow-glow); }
+
+/* Card hover lift refined */
+.t-card--interactive { will-change: transform; }
+.t-card--interactive:focus-visible {
+  border-color: var(--t-accent);
+  box-shadow: var(--t-shadow-2), 0 0 0 3px var(--t-accent-soft);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+/* Alert slide-in on mount */
+.t-alert { animation: t-fade-in var(--t-motion-base) var(--t-ease-out) both; }
+
+/* Progress bar: add a soft glow on fill */
+.t-progress__fill { box-shadow: 0 0 12px var(--t-accent-glow); }
+
+/* ──────────────────────────────────────────────
+   3 · Empty state primitive
+   ────────────────────────────────────────────── */
+.t-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--t-space-4);
+  padding: var(--t-space-9) var(--t-space-5);
+  text-align: center;
+  min-height: 260px;
+  border: 1px dashed var(--t-border-default);
+  border-radius: var(--t-radius-xl);
+  background: var(--t-surface-1);
+  animation: t-fade-in var(--t-motion-base) var(--t-ease-out) both;
+}
+.t-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--t-radius-pill);
+  background: var(--t-surface-3);
+  color: var(--t-text-muted);
+  font-size: var(--t-font-size-xl);
+}
+.t-empty__title {
+  font-size: var(--t-font-size-lg);
+  font-weight: var(--t-weight-semibold);
+  color: var(--t-text-primary);
+  letter-spacing: var(--t-tracking-tight);
+}
+.t-empty__desc {
+  font-size: var(--t-font-size-sm);
+  color: var(--t-text-muted);
+  max-width: 420px;
+  line-height: var(--t-line-relaxed);
+}
+.t-empty__actions { display: flex; gap: var(--t-space-3); margin-top: var(--t-space-2); }
+
+/* ──────────────────────────────────────────────
+   4 · Responsive pass — 320 / 640 / 1024 / 1280
+   ────────────────────────────────────────────── */
+
+/* Base (mobile-first defaults are handled by existing rules and tokens) */
+
+/* XS: very narrow phones — keep the layout functional at 320 px */
+@media (max-width: 360px) {
+  .app-content {
+    padding: var(--t-space-3) var(--t-space-3);
+  }
+  .t-btn { padding-left: var(--t-space-4); padding-right: var(--t-space-4); }
+  .t-card { padding: var(--t-space-4); }
+}
+
+/* SM: small phones */
+@media (max-width: 640px) {
+  :root {
+    --t-font-size-h1: 26px;
+    --t-font-size-h2: 22px;
+    --t-font-size-display: 32px;
+  }
+
+  .app-content { padding: var(--t-space-3) var(--t-space-4); }
+
+  .interview-sticky { padding-top: var(--t-space-1); }
+  .interview-top {
+    flex-wrap: wrap;
+    gap: var(--t-space-2);
+  }
+  .interview-progress-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--t-space-1);
+  }
+
+  .answer-actions,
+  .upload-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .answer-actions .t-btn,
+  .upload-actions .t-btn { width: 100%; }
+
+  .drawer {
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--t-radius-xl) var(--t-radius-xl) 0 0;
+  }
+
+  .t-skeleton-hero   { padding: var(--t-space-5) 0; }
+  .t-skeleton-bubble { padding: var(--t-space-4); }
+}
+
+/* MD: tablets & small laptops */
+@media (min-width: 641px) and (max-width: 1023px) {
+  .app-content { max-width: 640px; }
+}
+
+/* LG: desktops */
+@media (min-width: 1024px) {
+  .app-content { max-width: var(--t-content-width); }
+  .interview-sticky { padding-top: var(--t-space-3); }
+}
+
+/* XL: wide desktops — give the session screen room to breathe */
+@media (min-width: 1280px) {
+  .app-content { max-width: var(--t-content-width-wide); }
+}
+
+/* High-contrast: bump border strength and focus ring */
+@media (prefers-contrast: more) {
+  :root {
+    --t-border-subtle:  rgba(255, 255, 255, 0.20);
+    --t-border-default: rgba(255, 255, 255, 0.30);
+    --t-border-strong:  rgba(255, 255, 255, 0.50);
+    --t-focus-ring-width: 3px;
+  }
+  :root[data-theme="light"],
+  @media (prefers-color-scheme: light) {
+    --t-border-subtle:  rgba(15, 16, 32, 0.25);
+    --t-border-default: rgba(15, 16, 32, 0.40);
+    --t-border-strong:  rgba(15, 16, 32, 0.60);
+  }
+}
+
+/* Forced-colors (Windows High Contrast) */
+@media (forced-colors: active) {
+  .t-btn, .t-card, .t-alert, .t-badge, .t-field__control, .t-progress {
+    border: 1px solid CanvasText;
+  }
+  .t-btn--primary { background: Highlight; color: HighlightText; }
+  .t-progress__fill { background: Highlight; }
+}

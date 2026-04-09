@@ -1,0 +1,62 @@
+/* ═══════════════════════════════════════════════════════════════
+   Base · Focus, Motion, A11y
+   Global rules that complement existing resets in index.css.
+   Safe to layer on top of legacy styles.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Remove default focus outline only when a non-keyboard source triggers it;
+   keyboard users still get a visible ring. */
+:focus { outline: none; }
+
+:focus-visible {
+  outline: var(--t-focus-ring-width) solid var(--t-focus-ring-color);
+  outline-offset: var(--t-focus-ring-offset);
+  border-radius: var(--t-radius-sm);
+  transition: outline-offset var(--t-motion-fast) var(--t-ease-out);
+}
+
+/* Interactive elements get a minimum tap target without affecting layout
+   when already larger. */
+button, [role="button"], a, input, select, textarea, summary {
+  font-family: inherit;
+}
+
+/* Respect reduced motion: neutralize animations/transitions everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Visually hide but remain accessible to screen readers */
+.t-sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip link for keyboard users */
+.t-skip-link {
+  position: absolute;
+  left: var(--t-space-4);
+  top: var(--t-space-4);
+  padding: var(--t-space-2) var(--t-space-4);
+  background: var(--t-accent);
+  color: var(--t-on-accent);
+  border-radius: var(--t-radius-md);
+  font-weight: var(--t-weight-semibold);
+  text-decoration: none;
+  transform: translateY(-200%);
+  transition: transform var(--t-motion-base) var(--t-ease-out);
+  z-index: var(--t-z-tooltip);
+}
+.t-skip-link:focus-visible {
+  transform: translateY(0);
+}

@@ -1,9 +1,13 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, lazy, Suspense } from 'react';
 import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
-import ScoreReveal from './ScoreReveal';
-import WaveformVisualizer from './WaveformVisualizer';
+import { Button, Alert, ProgressBar, Skeleton } from './ui';
+
+// Heavy visuals — only needed while recording (waveform) or after evaluation (score).
+// Splitting them keeps the initial SessionScreen bundle small.
+const WaveformVisualizer = lazy(() => import('./WaveformVisualizer'));
+const ScoreReveal        = lazy(() => import('./ScoreReveal'));
 
 function appendTranscript(currentText, incomingText) {
   if (!incomingText) return currentText;
@@ -62,6 +66,14 @@ export default function SessionScreen({
     onSubmit(text);
   };
 
+  const handleAnswerKeyDown = (e) => {
+    // Doherty: keep submission fast with Cmd/Ctrl+Enter shortcut
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      void handleSubmit();
+    }
+  };
+
   const handleRetry = async () => {
     await cancel();
     updateDraft('');
@@ -97,22 +109,35 @@ export default function SessionScreen({
 
   return (
     <div className="interview-screen slide-up">
-      <div className="interview-top">
-        <button className="ghost-btn" type="button" onClick={() => void handleGoStart()}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
-          Back
-        </button>
-        <div className="interview-meta">
-          <span className="meta-section">{q.s}</span>
-          <span className="meta-divider">·</span>
-          <span className="meta-progress">Q{idx + 1}/{session.length}</span>
-          {attempts > 1 && <span className="meta-attempt">Attempt {attempts}</span>}
+      <div className="interview-sticky">
+        <div className="interview-top">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleGoStart()}
+            className="ghost-btn"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+            Back
+          </Button>
+          <div className="interview-meta" aria-live="polite">
+            <span className="meta-section">{q.s}</span>
+            <span className="meta-divider" aria-hidden="true">·</span>
+            <span className="meta-progress">Q{idx + 1}/{session.length}</span>
+            {attempts > 1 && <span className="meta-attempt">Attempt {attempts}</span>}
+          </div>
+          {stats.answered > 0 && <span className="avg-badge" aria-label={`Average score ${stats.avg} percent`}>{stats.avg}%</span>}
         </div>
-        {stats.answered > 0 && <span className="avg-badge">{stats.avg}%</span>}
-      </div>
 
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${prog}%` }} />
+        <ProgressBar
+          value={prog}
+          size="sm"
+          label={`Session progress: question ${idx + 1} of ${session.length}`}
+        />
+        <div className="interview-progress-meta">
+          <span>Question {idx + 1} of {session.length}</span>
+          {stats.answered > 0 && <span>{stats.correct}&nbsp;correct · {stats.partial}&nbsp;partial · {stats.incorrect}&nbsp;incorrect</span>}
+        </div>
       </div>
 
       <div className="interviewer-area">
@@ -122,18 +147,29 @@ export default function SessionScreen({
             <span className="bubble-tag">{q.s}</span>
             <span className="bubble-tag">Day {q.day}</span>
           </div>
-          <p className="bubble-text" onClick={!typingDone ? skipTyping : undefined}>
+          <p
+            className="bubble-text"
+            onClick={!typingDone ? skipTyping : undefined}
+            onKeyDown={!typingDone ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); skipTyping(); }
+            } : undefined}
+            role={!typingDone ? 'button' : undefined}
+            tabIndex={!typingDone ? 0 : undefined}
+            aria-label={!typingDone ? 'Skip typing animation' : undefined}
+          >
             {typedQuestion}
-            {!typingDone && <span className="cursor-blink">|</span>}
+            {!typingDone && <span className="cursor-blink" aria-hidden="true">|</span>}
           </p>
-          {!typingDone && <p className="tap-hint">tap to skip animation</p>}
+          {!typingDone && <p className="tap-hint">Press Enter or click to skip animation</p>}
         </div>
       </div>
 
       {phase === 'question' && (
         <div className="answer-area slide-up">
           <div className="voice-controls">
-            <WaveformVisualizer active={isRecording} />
+            <Suspense fallback={<Skeleton shape="rect" width="160px" height="24px" />}>
+              <WaveformVisualizer active={isRecording} />
+            </Suspense>
             <span className="voice-label" aria-live="polite">
               {isTranscribing ? 'Transcribing...' : label}
             </span>
@@ -153,22 +189,28 @@ export default function SessionScreen({
               </div>
             )}
           </div>
-          {voiceError && <div className="inline-error">{voiceError}</div>}
+          {voiceError && <Alert tone="warning">{voiceError}</Alert>}
           <textarea
             key={q.id}
             className="answer-input"
             placeholder="Type or speak your answer..."
+            aria-label="Your answer"
+            aria-describedby={`${q.id}-shortcut`}
             autoFocus
             value={draftAnswer}
             onChange={e => updateDraft(e.target.value)}
+            onKeyDown={handleAnswerKeyDown}
           />
-          {error && <div className="inline-error">{error}</div>}
+          <p id={`${q.id}-shortcut`} className="answer-shortcut-hint">
+            Press <kbd>⌘</kbd><kbd>Enter</kbd> or <kbd>Ctrl</kbd><kbd>Enter</kbd> to submit
+          </p>
+          {error && <Alert tone="danger">{error}</Alert>}
           <div className="answer-actions">
-            <button className="action-btn primary" type="button" onClick={() => void handleSubmit()}>
+            <Button variant="primary" onClick={() => void handleSubmit()} className="action-btn primary">
               Submit Answer
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-            </button>
-            <button className="action-btn ghost" type="button" onClick={() => void handleSkip()}>Skip</button>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </Button>
+            <Button variant="ghost" onClick={() => void handleSkip()} className="action-btn ghost">Skip</Button>
           </div>
         </div>
       )}
@@ -197,7 +239,9 @@ export default function SessionScreen({
 
           <div className={`result-panel ${result.verdict}`}>
             <div className="result-top">
-              <ScoreReveal score={result.score} verdict={result.verdict} />
+              <Suspense fallback={<Skeleton shape="circle" width="72px" height="72px" />}>
+                <ScoreReveal score={result.score} verdict={result.verdict} />
+              </Suspense>
               <div className="result-verdict-info">
                 <span className="verdict-text">
                   {result.verdict === 'correct' ? 'Correct' : result.verdict === 'partial' ? 'Partially Correct' : 'Incorrect'}
@@ -254,13 +298,29 @@ export default function SessionScreen({
 
           <div className="answer-actions">
             {result.verdict !== 'correct' && (
-              <button className="action-btn outline" type="button" onClick={() => void handleRetry()}>↺ Try Again</button>
+              <Button
+                variant="secondary"
+                onClick={() => void handleRetry()}
+                className="action-btn outline"
+              >
+                ↺ Try Again
+              </Button>
             )}
-            <button className="action-btn primary" type="button" onClick={() => void handleNext()}>
+            <Button
+              variant="primary"
+              onClick={() => void handleNext()}
+              className="action-btn primary"
+            >
               {idx + 1 >= session.length ? 'Finish Session' : 'Next Question →'}
-            </button>
+            </Button>
             {result.verdict !== 'correct' && (
-              <button className="action-btn ghost ml-auto" type="button" onClick={() => void handleSkip()}>Skip</button>
+              <Button
+                variant="ghost"
+                onClick={() => void handleSkip()}
+                className="action-btn ghost ml-auto"
+              >
+                Skip
+              </Button>
             )}
           </div>
         </div>

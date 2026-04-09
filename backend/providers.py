@@ -10,9 +10,16 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 import httpx
+
+
+def _log(*args, **kwargs):
+    """Print with an ISO timestamp prefix. Preserves the caller's stream."""
+    ts = datetime.now().isoformat(timespec="seconds")
+    print(f"[{ts}]", *args, **kwargs)
 
 # ─── Retry + provider fallback ────────────────────────────
 # Transient HTTP statuses worth retrying. 503 is the Google AI Studio
@@ -20,16 +27,60 @@ import httpx
 # generic transient gateway errors.
 RETRY_STATUSES: set[int] = {500, 502, 503, 504, 529}
 
+# Provider circuit-breaker: when a provider returns an overload status, mark
+# it "sick" for COOLDOWN_SECONDS. Subsequent calls within that window short-
+# circuit their retry chain and raise immediately so the fallback path runs
+# without waiting. This prevents the "two back-to-back LLM calls each pay
+# the full Gemini retry cost" problem on endpoints like /interview/start.
+OVERLOAD_COOLDOWN_SECONDS: float = 60.0
+_provider_cooldown: dict[str, float] = {}
+
+
+def _provider_sick(provider: str) -> bool:
+    deadline = _provider_cooldown.get(provider)
+    if deadline is None:
+        return False
+    if asyncio.get_event_loop().time() >= deadline:
+        _provider_cooldown.pop(provider, None)
+        return False
+    return True
+
+
+def _mark_provider_sick(provider: str) -> None:
+    _provider_cooldown[provider] = asyncio.get_event_loop().time() + OVERLOAD_COOLDOWN_SECONDS
+    _log(
+        f"[circuit-breaker] {provider} marked sick for {OVERLOAD_COOLDOWN_SECONDS:.0f}s; "
+        f"next calls will skip straight to fallback",
+        file=sys.stderr,
+    )
+
 
 async def _retry_with_backoff(
     fn: Callable[[], Awaitable[Any]],
     *,
-    max_attempts: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 8.0,
+    max_attempts: int = 2,
+    base_delay: float = 0.3,
+    max_delay: float = 2.0,
     label: str = "call",
+    provider: str | None = None,
 ) -> Any:
-    """Run `fn`, retrying on transient HTTP errors with exponential backoff."""
+    """Run `fn`, retrying on transient HTTP errors with exponential backoff.
+
+    If `provider` is given and is currently under overload cooldown, raise
+    immediately so the caller can fall back without paying the retry cost.
+    """
+    if provider and _provider_sick(provider):
+        _log(
+            f"[retry:{label}] skipping — {provider} is under overload cooldown",
+            file=sys.stderr,
+        )
+        # Raise a synthetic 503 so the fallback branch in the caller runs.
+        raise httpx.HTTPStatusError(
+            f"{provider} under overload cooldown",
+            request=httpx.Request("POST", "https://cooldown.local"),
+            response=httpx.Response(503),
+        )
+
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -38,9 +89,11 @@ async def _retry_with_backoff(
             last_error = error
             status = error.response.status_code if error.response is not None else 0
             if status not in RETRY_STATUSES or attempt == max_attempts:
+                if status in RETRY_STATUSES and provider:
+                    _mark_provider_sick(provider)
                 raise
             delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-            print(
+            _log(
                 f"[retry:{label}] attempt {attempt}/{max_attempts} failed with HTTP {status}; "
                 f"sleeping {delay:.1f}s",
                 file=sys.stderr,
@@ -51,7 +104,7 @@ async def _retry_with_backoff(
             if attempt == max_attempts:
                 raise
             delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-            print(
+            _log(
                 f"[retry:{label}] attempt {attempt}/{max_attempts} network error: {error}; "
                 f"sleeping {delay:.1f}s",
                 file=sys.stderr,
@@ -138,7 +191,7 @@ def parse_eval_json(text: str) -> dict | None:
     """Extract evaluation JSON from any LLM output."""
     import sys
     if not text or not text.strip():
-        print(f"[parse_eval_json] Empty text received", file=sys.stderr)
+        _log(f"[parse_eval_json] Empty text received", file=sys.stderr)
         return None
 
     # Remove markdown fences and leading/trailing whitespace
@@ -149,18 +202,18 @@ def parse_eval_json(text: str) -> dict | None:
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start == -1 or end <= start:
-        print(f"[parse_eval_json] No JSON object found. Raw text (200 chars): {repr(text[:200])}", file=sys.stderr)
+        _log(f"[parse_eval_json] No JSON object found. Raw text (200 chars): {repr(text[:200])}", file=sys.stderr)
         return None
 
     json_str = cleaned[start : end + 1]
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
-        print(f"[parse_eval_json] JSON parse error: {e}. Snippet: {repr(json_str[:200])}", file=sys.stderr)
+        _log(f"[parse_eval_json] JSON parse error: {e}. Snippet: {repr(json_str[:200])}", file=sys.stderr)
         return None
 
     if "score" not in data or "verdict" not in data:
-        print(f"[parse_eval_json] Missing required fields. Got keys: {list(data.keys())}", file=sys.stderr)
+        _log(f"[parse_eval_json] Missing required fields. Got keys: {list(data.keys())}", file=sys.stderr)
         return None
 
     score = max(0, min(100, int(data.get("score", 0))))
@@ -235,12 +288,12 @@ async def call_gemini(
 
     candidates = data.get("candidates", [])
     if not candidates:
-        print(f"[Gemini] No candidates in response: {data}", file=sys.stderr)
+        _log(f"[Gemini] No candidates in response: {data}", file=sys.stderr)
         raise ProviderResponseError("Gemini returned no candidates")
 
     parts = candidates[0].get("content", {}).get("parts", [])
     text = "".join(p.get("text", "") for p in parts if p.get("text"))
-    print(f"[Gemini] Raw text (200): {repr(text[:200])}", file=sys.stderr)
+    _log(f"[Gemini] Raw text (200): {repr(text[:200])}", file=sys.stderr)
     return parse_eval_json(text)
 
 
@@ -384,7 +437,7 @@ async def evaluate_with_provider(
         return await _evaluate_once(client, provider, api_key, model, section, question, answer, profile)
 
     try:
-        return await _retry_with_backoff(_primary, max_attempts=3, label=f"eval:{provider}")
+        return await _retry_with_backoff(_primary, label=f"eval:{provider}", provider=provider)
     except (httpx.HTTPStatusError, httpx.RequestError) as primary_error:
         if provider == "groq" or provider == "ollama":
             raise
@@ -393,14 +446,14 @@ async def evaluate_with_provider(
         try:
             resolve_api_key("groq", "")
         except ClientInputError:
-            print(
+            _log(
                 f"[fallback:eval] {provider} exhausted retries and no GROQ_API_KEY is set; "
                 f"surfacing original error",
                 file=sys.stderr,
             )
             raise primary_error
 
-        print(
+        _log(
             f"[fallback:eval] {provider} exhausted retries; falling back to Groq "
             f"({GROQ_FALLBACK_MODEL})",
             file=sys.stderr,
@@ -514,7 +567,7 @@ async def _call_llm_for_questions(
     else:
         raise ClientInputError(f"Unknown provider: {provider}")
 
-    print(f"[gen] raw (len={len(text)}): {repr(text[:400])}", file=sys.stderr)
+    _log(f"[gen] raw (len={len(text)}): {repr(text[:400])}", file=sys.stderr)
 
     # Parse JSON — accept either an array of questions or a single question object
     cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
@@ -700,7 +753,7 @@ async def generate_question_from_file(
             # Groq / Ollama don't support vision natively — extract via OCR hint fallback
             raise ClientInputError(f"Provider '{provider}' does not support image vision. Use Gemini, OpenAI, or Anthropic for images, or upload a PDF.")
 
-        print(f"[file-vision] raw (200): {repr(text[:200])}", file=sys.stderr)
+        _log(f"[file-vision] raw (200): {repr(text[:200])}", file=sys.stderr)
         # Parse single JSON object
         cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
         cleaned = re.sub(r"```", "", cleaned).strip()
@@ -943,7 +996,7 @@ async def _call_chat_text_with_fallback(
         )
 
     try:
-        return await _retry_with_backoff(_primary, max_attempts=3, label=f"{label}:{provider}")
+        return await _retry_with_backoff(_primary, label=f"{label}:{provider}", provider=provider)
     except (httpx.HTTPStatusError, httpx.RequestError) as primary_error:
         if provider == "groq":
             raise  # already on the fallback target
@@ -952,14 +1005,14 @@ async def _call_chat_text_with_fallback(
         try:
             groq_key = resolve_api_key("groq", "")
         except ClientInputError:
-            print(
+            _log(
                 f"[fallback:{label}] {provider} exhausted retries and no GROQ_API_KEY is set; "
                 f"surfacing original error",
                 file=sys.stderr,
             )
             raise primary_error
 
-        print(
+        _log(
             f"[fallback:{label}] {provider} exhausted retries; falling back to Groq "
             f"({GROQ_FALLBACK_MODEL})",
             file=sys.stderr,
@@ -974,7 +1027,7 @@ async def _call_chat_text_with_fallback(
         try:
             return await _retry_with_backoff(_fallback, max_attempts=2, label=f"{label}:groq")
         except Exception as fallback_error:
-            print(
+            _log(
                 f"[fallback:{label}] groq fallback also failed: {fallback_error}",
                 file=sys.stderr,
             )
