@@ -26,7 +26,7 @@ function normaliseProfiles(profiles = {}) {
 }
 
 function normaliseSettings(raw = {}) {
-  const provider = PROVIDER_IDS.includes(raw.provider) ? raw.provider : 'ollama';
+  const provider = PROVIDER_IDS.includes(raw.provider) ? raw.provider : 'gemini';
   const profiles = normaliseProfiles(raw.profiles);
 
   // Migrate older flat settings into the active provider profile.
