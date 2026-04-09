@@ -3,11 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mock Interviewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0a12" />
+    <meta name="description" content="Sheikh Mock — adaptive, conversational AI mock interviewer that reads your resume and asks tailored questions." />
+
+    <!-- Perf: warm up backend + transcription origins before the first request. -->
+    <link rel="preconnect" href="http://localhost:8000" crossorigin />
+    <link rel="dns-prefetch" href="http://localhost:8000" />
+    <link rel="preconnect" href="https://api.groq.com" crossorigin />
+    <link rel="dns-prefetch" href="https://api.groq.com" />
+
+    <title>Sheikh Mock — AI Interview Practice</title>
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <p style="padding:24px;color:#e8e8f0;background:#0a0a12;font-family:sans-serif">
+        Sheikh Mock needs JavaScript to run. Please enable it and reload.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

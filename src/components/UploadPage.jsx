@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { Button, Alert } from './ui';
 
 const ACCEPT_TYPES = ['application/pdf'];
 const ACCEPT_EXT = ['.pdf'];
@@ -87,10 +88,15 @@ export default function UploadPage({ onGenerateFromFile, onBack }) {
     <div className="upload-page slide-up">
       <div className="upload-header">
         {onBack && (
-          <button className="upload-back-btn" type="button" onClick={onBack}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onBack}
+            className="upload-back-btn"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
             Back
-          </button>
+          </Button>
         )}
         <div className="upload-title-area">
           <h2 className="upload-title">Sheikh Mock Interview</h2>
@@ -130,8 +136,14 @@ export default function UploadPage({ onGenerateFromFile, onBack }) {
               <div className="dropzone-file-name">{file.name}</div>
               <div className="dropzone-file-size">{(file.size / 1024).toFixed(1)} KB</div>
             </div>
-            <button className="dropzone-clear" type="button" onClick={clearFile} title="Remove file">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <button
+              className="dropzone-clear"
+              type="button"
+              onClick={clearFile}
+              title="Remove file"
+              aria-label="Remove selected file"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
         ) : (
@@ -150,27 +162,33 @@ export default function UploadPage({ onGenerateFromFile, onBack }) {
         )}
       </div>
 
-      {error && <p className="upload-error">{error}</p>}
+      {error && (
+        <div className="upload-alert-slot">
+          <Alert tone="danger" title="Upload issue">{error}</Alert>
+        </div>
+      )}
 
       <div className="upload-actions">
-        <button
-          className="action-btn primary ai-gen-btn"
-          type="button"
+        <Button
+          variant="primary"
+          size="lg"
+          className="ai-gen-btn"
           onClick={handleGenerate}
           disabled={!file || loading}
+          aria-busy={loading || undefined}
         >
           {loading ? (
             <>
-              <span className="think-dots" style={{ display: 'inline-flex', gap: 3 }}><span /><span /><span /></span>
+              <span className="think-dots" style={{ display: 'inline-flex', gap: 3 }} aria-hidden="true"><span /><span /><span /></span>
               Reading your resume…
             </>
           ) : (
             <>
               ✨ Start Interview
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </>
           )}
-        </button>
+        </Button>
       </div>
 
       <p className="upload-note">

@@ -7,11 +7,19 @@ Run:  uvicorn main:app --reload --port 8000
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 import os
 
 from dotenv import load_dotenv
+
+
+def _log(*args, **kwargs):
+    """Print with an ISO timestamp prefix. Preserves the caller's stream."""
+    ts = datetime.now().isoformat(timespec="seconds")
+    print(f"[{ts}]", *args, **kwargs)
 
 # Load .env from the project root (one level up from backend/) first,
 # then fall back to backend/.env if present. Either way, variables that are
@@ -120,17 +128,23 @@ async def _fetch_ollama_models() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    http_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
-    print("[OK] Sheikh Mock backend ready - multi-provider mode")
+    # Keep per-request timeouts tight: a healthy LLM call returns in 2–6s, so a
+    # 25s read timeout means a stalled upstream (e.g. Gemini overload) bails
+    # fast and the circuit breaker + Groq fallback kick in within seconds
+    # instead of minutes.
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(25.0, connect=5.0, read=25.0, write=25.0),
+    )
+    _log("[OK] Sheikh Mock backend ready - multi-provider mode")
 
     try:
         models = await _fetch_ollama_models()
         if models:
-            print(f"  Ollama connected - models: {models}")
+            _log(f"  Ollama connected - models: {models}")
         else:
-            print("  Ollama not running (optional - cloud providers still work)")
+            _log("  Ollama not running (optional - cloud providers still work)")
     except httpx.ConnectError:
-        print("  Ollama not running (optional - cloud providers still work)")
+        _log("  Ollama not running (optional - cloud providers still work)")
 
     yield
     await http_client.aclose()
@@ -477,19 +491,37 @@ async def interview_start(
     chosen_model = model or "gemma-3-12b-it"
 
     # Step 1: extract a structured profile (domain, role, experience, isTechnical, ...).
+    # This is best-effort — if the LLM is slow or flaky, we bail out within a
+    # hard 8s wall-clock budget and proceed with a generic profile so the user
+    # isn't stuck watching the loader while the opening question is still
+    # gated on profile extraction.
     try:
-        profile = await extract_profile_from_resume(
-            client=http_client,
-            provider=provider,
-            api_key=api_key,
-            model=chosen_model,
-            resume_text=resume_text,
+        profile = await asyncio.wait_for(
+            extract_profile_from_resume(
+                client=http_client,
+                provider=provider,
+                api_key=api_key,
+                model=chosen_model,
+                resume_text=resume_text,
+            ),
+            timeout=8.0,
         )
     except ClientInputError as error:
         raise HTTPException(status_code=400, detail=str(error))
+    except asyncio.TimeoutError:
+        _log("[interview] profile extraction exceeded 8s budget; using generic profile")
+        profile = {
+            "domain": "General Professional",
+            "roles": ["Professional"],
+            "yearsOfExperience": 0,
+            "experienceLevel": "mid",
+            "isTechnical": True,
+            "topSkills": [],
+            "notableProjects": [],
+        }
     except Exception as error:
         # Profile extraction is best-effort — fall back to a generic profile.
-        print(f"[interview] profile extraction failed (non-fatal): {error}")
+        _log(f"[interview] profile extraction failed (non-fatal): {error}")
         profile = {
             "domain": "General Professional",
             "roles": ["Professional"],
@@ -580,7 +612,7 @@ async def interview_turn(req: InterviewTurnRequest):
             state=state,
         )
     except Exception as error:
-        print(f"[interview] extract failed (non-fatal): {error}")
+        _log(f"[interview] extract failed (non-fatal): {error}")
         insights = {"newSkills": [], "newProjects": [], "answerQuality": "average",
                     "confidence": "medium", "suggestedNextPhase": None}
 

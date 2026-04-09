@@ -1,0 +1,110 @@
+/* ═══════════════════════════════════════════════════════════════
+   Phase 2 — Screen-level additive rules
+   Sticky session header, drawer focus management, landmark spacing,
+   Alert placement, and skip link positioning.
+   All selectors are additive — legacy class rules still apply.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── App landmarks ─────────────────────────── */
+.app-main {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-alert-slot {
+  margin-bottom: var(--t-space-4);
+}
+
+/* ── Skip link (Phase 1 class, positioned for this layout) ── */
+.t-skip-link { left: var(--t-space-4); top: var(--t-space-2); }
+
+/* ── Session sticky header ─────────────────── */
+.interview-sticky {
+  position: sticky;
+  top: 0;
+  z-index: var(--t-z-sticky);
+  padding-top: var(--t-space-2);
+  padding-bottom: var(--t-space-3);
+  margin-bottom: var(--t-space-4);
+  background: linear-gradient(
+    180deg,
+    var(--t-surface-0) 0%,
+    var(--t-surface-0) 72%,
+    rgba(10, 10, 18, 0) 100%
+  );
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.interview-sticky .interview-top { margin-bottom: var(--t-space-3); }
+.interview-sticky .progress-bar { margin-top: 0; }
+
+/* Segmented progress hints under the bar */
+.interview-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--t-space-2);
+  font-size: var(--t-font-size-xs);
+  color: var(--t-text-muted);
+  letter-spacing: var(--t-tracking-wide);
+}
+
+/* ── Answer area shortcut hint ─────────────── */
+.answer-shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--t-space-1);
+  font-size: var(--t-font-size-xs);
+  color: var(--t-text-muted);
+  margin-left: var(--t-space-2);
+}
+.answer-shortcut-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--t-space-2);
+  background: var(--t-surface-3);
+  border: 1px solid var(--t-border-default);
+  border-bottom-width: 2px;
+  border-radius: var(--t-radius-xs);
+  font-family: var(--t-font-mono);
+  font-size: 11px;
+  color: var(--t-text-secondary);
+  line-height: 1.4;
+}
+
+/* ── Upload page — error slot, hint layout ── */
+.upload-alert-slot { margin-top: var(--t-space-4); }
+.upload-dropzone-wrap { margin-top: var(--t-space-5); }
+
+/* ── Drawer focus-trap backdrop enhancements ─ */
+.drawer-overlay[data-trap="true"] {
+  /* scrim animation: fade in */
+  animation: t-drawer-fade-in var(--t-motion-base) var(--t-ease-out);
+}
+.drawer-overlay[data-trap="true"] .drawer {
+  animation: t-drawer-slide-in var(--t-motion-slow) var(--t-ease-standard);
+}
+@keyframes t-drawer-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes t-drawer-slide-in {
+  from { transform: translateX(16px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* Keep the drawer footer sticky for tall drawers */
+.drawer-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--t-surface-2);
+  border-top: 1px solid var(--t-border-subtle);
+}
+.drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--t-surface-2);
+  border-bottom: 1px solid var(--t-border-subtle);
+}
