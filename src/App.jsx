@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
-import { fetchQuestions, fetchProviders, evaluateAnswer, generateQuestions, startInterview, healthCheck } from './api';
+import { fetchQuestions, fetchProviders, evaluateAnswer, generateQuestions, startInterview, healthCheck, cleanTranscript } from './api';
 import { useSettings } from './hooks/useSettings';
 import StatusBar from './components/StatusBar';
 import UploadPage from './components/UploadPage';
@@ -141,8 +141,13 @@ export default function App() {
           sessionId: data.session_id,
           question: data.question,
           section: data.section,
+          category: data.category,
+          questionNumber: data.question_number,
+          totalQuestions: data.total_questions,
+          whatToEvaluate: data.what_to_evaluate,
           state: data.state,
           profile: data.profile,
+          blueprint: data.blueprint,
         },
       }));
     } catch (e) {
@@ -245,11 +250,18 @@ export default function App() {
 
     setS(prev => ({ ...prev, draftAnswer: text, submittedAnswer: text, phase: 'thinking' }));
 
+    // Clean up voice transcription errors before scoring.
+    const cleaned = await cleanTranscript(text, settings.provider, settings.apiKey, settings.model);
+    if (cleaned && cleaned !== text) {
+      setS(prev => ({ ...prev, submittedAnswer: cleaned }));
+    }
+    const answerToEval = cleaned || text;
+
     let result;
     try {
       result = await evaluateAnswer(
         q.id,
-        text,
+        answerToEval,
         settings.provider,
         settings.apiKey,
         settings.model,
@@ -330,8 +342,13 @@ export default function App() {
               sessionId={s.interviewSession.sessionId}
               initialQuestion={s.interviewSession.question}
               initialSection={s.interviewSession.section}
+              initialCategory={s.interviewSession.category}
+              initialQuestionNumber={s.interviewSession.questionNumber}
+              totalQuestions={s.interviewSession.totalQuestions}
+              initialWhatToEvaluate={s.interviewSession.whatToEvaluate}
               initialState={s.interviewSession.state}
               initialProfile={s.interviewSession.profile}
+              initialBlueprint={s.interviewSession.blueprint}
               settings={settings}
               groqApiKey={settings.provider === 'groq' ? settings.apiKey : (import.meta.env.VITE_GROQ_API_KEY || '')}
               onGoStart={() => setS(prev => ({ ...prev, phase: 'start', interviewSession: null }))}

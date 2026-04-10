@@ -39,6 +39,15 @@ export function useVoice(onTranscript, groqApiKey = '') {
 
   const recogRef = useRef(null);
   const hasMicRef = useRef(true);
+  const finalTranscriptRef = useRef('');
+
+  // Dual-recording: in browser mode, also record audio so Whisper can rescue short results.
+  const dualRecorderRef = useRef(null);
+  const dualChunksRef = useRef([]);
+  const dualStreamRef = useRef(null);
+
+  const lastInterimRef = useRef('');     // track interim text so it's not lost on restart
+  const restartTimerRef = useRef(null);
 
   const useWhisper = () => !!groqKeyRef.current;
 
@@ -54,14 +63,21 @@ export function useVoice(onTranscript, groqApiKey = '') {
       let interim = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          onTranscriptRef.current(event.results[i][0].transcript);
+          finalTranscriptRef.current += text + ' ';
+          lastInterimRef.current = '';  // clear — it became final
+          onTranscriptRef.current(text);
         } else {
-          interim = event.results[i][0].transcript;
+          interim = text;
         }
       }
 
-      if (interim) setLabel('Hearing: ' + interim);
+      // Save interim so we can rescue it if recognition restarts before it becomes final.
+      if (interim) {
+        lastInterimRef.current = interim;
+        setLabel('Hearing: ' + interim);
+      }
     };
 
     recognition.onerror = (event) => {
@@ -82,11 +98,23 @@ export function useVoice(onTranscript, groqApiKey = '') {
     };
 
     recognition.onend = () => {
+      // Flush any interim text that never became final — Chrome drops it on restart.
+      if (lastInterimRef.current && isRecRef.current) {
+        const rescued = lastInterimRef.current.trim();
+        if (rescued) {
+          finalTranscriptRef.current += rescued + ' ';
+          onTranscriptRef.current(rescued);
+        }
+        lastInterimRef.current = '';
+      }
+
       if (isRecRef.current && hasMicRef.current) {
+        // Restart immediately, with a short fallback delay if it fails.
+        clearTimeout(restartTimerRef.current);
         try {
           recognition.start();
         } catch {
-          setTimeout(() => {
+          restartTimerRef.current = setTimeout(() => {
             if (isRecRef.current && hasMicRef.current) {
               try {
                 recognition.start();
@@ -96,7 +124,7 @@ export function useVoice(onTranscript, groqApiKey = '') {
                 setLabel('Click Voice to speak your answer');
               }
             }
-          }, 200);
+          }, 100);  // 100ms — minimise the gap
         }
       } else {
         isRecRef.current = false;
@@ -214,9 +242,10 @@ export function useVoice(onTranscript, groqApiKey = '') {
     return stopPromise;
   }, []);
 
-  const startSpeech = useCallback(() => {
+  const startSpeech = useCallback(async () => {
     if (!hasMicRef.current || !recogRef.current) return;
 
+    finalTranscriptRef.current = '';
     isRecRef.current = true;
     try {
       recogRef.current.start();
@@ -228,12 +257,85 @@ export function useVoice(onTranscript, groqApiKey = '') {
         setLabel('Listening — speak now...');
       }
     }
+
+    // Start a background MediaRecorder so Whisper can rescue short/bad results.
+    if (groqKeyRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        dualStreamRef.current = stream;
+        dualChunksRef.current = [];
+        const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find(
+          type => MediaRecorder.isTypeSupported(type)
+        ) || '';
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) dualChunksRef.current.push(e.data);
+        };
+        recorder.start(250);
+        dualRecorderRef.current = recorder;
+      } catch {
+        // Non-fatal: Whisper rescue won't be available.
+      }
+    }
   }, []);
 
-  const stopSpeech = useCallback(() => {
+  const stopSpeech = useCallback(async () => {
     isRecRef.current = false;
+    clearTimeout(restartTimerRef.current);
+    lastInterimRef.current = '';
     try { recogRef.current?.stop(); } catch { /* ignore */ }
     setIsRecording(false);
+
+    // Stop the dual recorder if running.
+    const dualRecorder = dualRecorderRef.current;
+    const dualStream = dualStreamRef.current;
+
+    if (dualRecorder && dualRecorder.state !== 'inactive') {
+      const browserWords = (finalTranscriptRef.current || '').trim().split(/\s+/).filter(Boolean).length;
+
+      // If browser gave fewer than 5 words, try Whisper rescue.
+      if (browserWords < 5 && groqKeyRef.current) {
+        setLabel('Short result — trying Whisper...');
+        setIsTranscribing(true);
+
+        try {
+          await new Promise((resolve) => {
+            dualRecorder.onstop = resolve;
+            dualRecorder.stop();
+          });
+
+          const blob = new Blob(dualChunksRef.current, { type: dualRecorder.mimeType || 'audio/webm' });
+          dualChunksRef.current = [];
+
+          if (blob.size > 1000) {
+            const text = await transcribeAudio(blob, groqKeyRef.current);
+            if (text && text.trim().split(/\s+/).length > browserWords) {
+              // Whisper gave a better result — replace.
+              onTranscriptRef.current(text);
+              setLabel(`Whisper rescued: ${text.split(' ').length} words`);
+              setTimeout(() => setLabel('Click Voice to speak your answer'), 3000);
+              finalTranscriptRef.current = '';
+              setIsTranscribing(false);
+              dualStream?.getTracks().forEach(t => t.stop());
+              dualStreamRef.current = null;
+              dualRecorderRef.current = null;
+              return;
+            }
+          }
+        } catch {
+          // Non-fatal: keep the browser result.
+        }
+        setIsTranscribing(false);
+      } else {
+        try { dualRecorder.stop(); } catch { /* ignore */ }
+      }
+    }
+
+    // Clean up dual recording resources.
+    dualStream?.getTracks().forEach(t => t.stop());
+    dualStreamRef.current = null;
+    dualRecorderRef.current = null;
+    finalTranscriptRef.current = '';
     setLabel('Click Voice to speak your answer');
   }, []);
 

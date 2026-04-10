@@ -3,6 +3,7 @@ import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
 import { Button, Alert, ProgressBar, Skeleton } from './ui';
+import RoboFetch from './RoboFetch';
 
 // Heavy visuals — only needed while recording (waveform) or after evaluation (score).
 // Splitting them keeps the initial SessionScreen bundle small.
@@ -34,6 +35,7 @@ export default function SessionScreen({
   groqApiKey,
 }) {
   const [error, setError] = useState('');
+  const [fetchingNext, setFetchingNext] = useState(false);
   const q = session[idx];
   const draftRef = useRef(draftAnswer);
   draftRef.current = draftAnswer;
@@ -89,7 +91,12 @@ export default function SessionScreen({
   const handleNext = async () => {
     await cancel();
     updateDraft('');
-    onNext();
+    setFetchingNext(true);
+    // Small delay so the robot runs before the instant swap.
+    setTimeout(() => {
+      setFetchingNext(false);
+      onNext();
+    }, 1800);
   };
 
   const handleGoStart = async () => {
@@ -106,6 +113,14 @@ export default function SessionScreen({
         : phase === 'result' && result?.verdict === 'incorrect' ? 'disappointed'
           : (!typingDone && phase === 'question') ? 'speaking'
             : 'idle';
+
+  if (fetchingNext) {
+    return (
+      <div className="interview-screen slide-up">
+        <RoboFetch questionNumber={idx + 2} total={session.length} />
+      </div>
+    );
+  }
 
   return (
     <div className="interview-screen slide-up">
@@ -171,6 +186,7 @@ export default function SessionScreen({
               <WaveformVisualizer active={isRecording} />
             </Suspense>
             <span className="voice-label" aria-live="polite">
+              {isRecording && <span className="pulse-dot" />}
               {isTranscribing ? 'Transcribing...' : label}
             </span>
             {mode !== 'none' && hasMic && (

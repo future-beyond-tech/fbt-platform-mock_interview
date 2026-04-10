@@ -1,5 +1,7 @@
 # FBT Mock — AI Interview Simulator
 
+> An official product of **[FBT — Future Beyond Tech](https://futurebeyondtech.com)**
+
 An immersive mock interview app for JavaScript/React roles with real-time AI evaluation. Supports **5 LLM providers**: Ollama (local/free), Groq, Google Gemini, OpenAI, and Anthropic.
 
 ## Architecture
