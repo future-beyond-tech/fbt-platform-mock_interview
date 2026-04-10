@@ -1,5 +1,7 @@
 import React, { StrictMode } from 'react'
 import ReactDOM, { createRoot } from 'react-dom/client'
+import { Provider } from 'react-redux'
+import { store } from './store'
 import './index.css'
 import App from './App.jsx'
 import { installAxe } from './devtools/axe.js'
@@ -11,6 +13,8 @@ if (import.meta.env.DEV) {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App />
+    <Provider store={store}>
+      <App />
+    </Provider>
   </StrictMode>,
 )

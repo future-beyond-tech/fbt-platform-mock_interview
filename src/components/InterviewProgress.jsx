@@ -33,6 +33,7 @@ export default function InterviewProgress({ questionNumber, totalQuestions, cate
             </span>
             <span className="iv-profile-meta">
               {blueprint?.primary_domain || profile?.domain || 'General'}
+              {blueprint?.subject_specialization ? ` · ${blueprint.subject_specialization}` : ''}
               {' · '}
               {blueprint?.seniority_level || profile?.experienceLevel || 'mid'}
               {' · '}
