@@ -1097,6 +1097,345 @@ html, body {
   to { opacity: 1; }
 }
 
+/* ══════════════════════════════════════════════════════
+   RoboFetch — Robot runs across screen pulling next Q
+   ══════════════════════════════════════════════════════ */
+
+/* ── Stage ── */
+.robo-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px 48px;
+  min-height: 320px;
+  user-select: none;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Ground track ── */
+.robo-track {
+  position: absolute;
+  bottom: 96px;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+.robo-track-line {
+  position: absolute;
+  inset: 0;
+  background: var(--t-border-default, rgba(255,255,255,0.10));
+}
+.robo-track-dashes {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--t-accent, #64ffda) 0px,
+    var(--t-accent, #64ffda) 8px,
+    transparent 8px,
+    transparent 20px
+  );
+  opacity: 0.25;
+  animation: roboTrackScroll 0.4s linear infinite;
+}
+@keyframes roboTrackScroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-20px); }
+}
+
+/* ── Runner group (robot + rope + card) — runs left→center ── */
+.robo-runner {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  animation: roboRunIn 1.6s var(--t-ease-out, cubic-bezier(0, 0, 0.2, 1)) forwards;
+  transform: translateX(110%);
+}
+@keyframes roboRunIn {
+  0%   { transform: translateX(110%); }
+  65%  { transform: translateX(-8%); }
+  80%  { transform: translateX(3%); }
+  100% { transform: translateX(0); }
+}
+
+/* ── Robot body container ── */
+.robo-body {
+  position: relative;
+  width: 48px;
+  height: 72px;
+  animation: roboBounce 0.28s ease-in-out infinite;
+  z-index: 2;
+}
+@keyframes roboBounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* ── Antenna ── */
+.robo-antenna {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.robo-antenna-stem {
+  width: 2px;
+  height: 10px;
+  background: var(--t-text-muted, #9a9ab5);
+  animation: roboAntennaSway 0.6s ease-in-out infinite alternate;
+  transform-origin: bottom center;
+}
+@keyframes roboAntennaSway {
+  from { transform: rotate(-12deg); }
+  to   { transform: rotate(12deg); }
+}
+.robo-antenna-ball {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--t-accent, #64ffda);
+  box-shadow: 0 0 8px var(--t-accent, #64ffda);
+  animation: roboBlink 1.2s ease-in-out infinite;
+}
+@keyframes roboBlink {
+  0%, 70%, 100% { opacity: 1; transform: scale(1); }
+  80%           { opacity: 0.3; transform: scale(0.7); }
+}
+
+/* ── Head ── */
+.robo-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 24px;
+  background: var(--t-surface-3, #1e1e32);
+  border: 2px solid var(--t-border-strong, rgba(255,255,255,0.18));
+  border-radius: 8px 8px 4px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.robo-eye {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t-accent, #64ffda);
+  box-shadow: 0 0 6px rgba(100, 255, 218, 0.5);
+  animation: roboEyePulse 2s ease-in-out infinite;
+}
+@keyframes roboEyePulse {
+  0%, 90%, 100% { transform: scaleY(1); }
+  95%           { transform: scaleY(0.15); }
+}
+.robo-mouth {
+  width: 8px;
+  height: 3px;
+  border-radius: 0 0 2px 2px;
+  background: var(--t-text-muted, #9a9ab5);
+  opacity: 0.5;
+}
+
+/* ── Torso ── */
+.robo-torso {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 22px;
+  background: var(--t-surface-4, #262640);
+  border: 2px solid var(--t-border-strong, rgba(255,255,255,0.18));
+  border-radius: 4px 4px 6px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.robo-chest-light {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--t-accent, #64ffda);
+  animation: roboChestPulse 0.8s ease-in-out infinite alternate;
+}
+@keyframes roboChestPulse {
+  from { opacity: 0.4; box-shadow: 0 0 2px var(--t-accent); }
+  to   { opacity: 1; box-shadow: 0 0 10px var(--t-accent); }
+}
+
+/* ── Arms ── */
+.robo-arm {
+  position: absolute;
+  top: 28px;
+  width: 6px;
+  height: 18px;
+  background: var(--t-surface-3, #1e1e32);
+  border: 1.5px solid var(--t-border-default, rgba(255,255,255,0.10));
+  border-radius: 3px;
+  transform-origin: top center;
+}
+.robo-arm-back {
+  left: 2px;
+  animation: roboArmSwing 0.28s ease-in-out infinite;
+}
+.robo-arm-front {
+  right: 2px;
+  animation: roboArmSwing 0.28s ease-in-out infinite reverse;
+}
+@keyframes roboArmSwing {
+  0%, 100% { transform: rotate(25deg); }
+  50%      { transform: rotate(-25deg); }
+}
+
+/* ── Legs ── */
+.robo-leg {
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 22px;
+  background: var(--t-surface-3, #1e1e32);
+  border: 1.5px solid var(--t-border-default, rgba(255,255,255,0.10));
+  border-radius: 3px 3px 4px 4px;
+  transform-origin: top center;
+}
+.robo-leg-back {
+  left: 10px;
+  animation: roboLegRun 0.28s ease-in-out infinite;
+}
+.robo-leg-front {
+  right: 10px;
+  animation: roboLegRun 0.28s ease-in-out infinite reverse;
+}
+@keyframes roboLegRun {
+  0%, 100% { transform: rotate(30deg); }
+  50%      { transform: rotate(-30deg); }
+}
+
+/* ── Dust puffs ── */
+.robo-dust {
+  position: absolute;
+  bottom: 4px;
+  left: -20px;
+  z-index: 1;
+}
+.dust-puff {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t-text-muted, #9a9ab5);
+  opacity: 0;
+  animation: roboDustPuff 0.6s ease-out infinite;
+}
+.dust-puff.dust-1 { animation-delay: 0s;    left: 0;    bottom: 0; }
+.dust-puff.dust-2 { animation-delay: 0.15s; left: -8px; bottom: 4px; }
+.dust-puff.dust-3 { animation-delay: 0.30s; left: -4px; bottom: -2px; }
+
+@keyframes roboDustPuff {
+  0%   { opacity: 0.5; transform: translate(0, 0) scale(0.5); }
+  100% { opacity: 0;   transform: translate(-18px, -6px) scale(1.5); }
+}
+
+/* ── Rope ── */
+.robo-rope {
+  width: 40px;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--t-text-muted, #9a9ab5) 0px,
+    var(--t-text-muted, #9a9ab5) 4px,
+    transparent 4px,
+    transparent 7px
+  );
+  align-self: center;
+  margin-bottom: 20px;
+  animation: roboRopePull 0.4s ease-in-out infinite alternate;
+  z-index: 1;
+}
+@keyframes roboRopePull {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0.85); }
+}
+
+/* ── Question card being pulled ── */
+.robo-card {
+  width: 80px;
+  height: 56px;
+  background: var(--t-surface-2, #161625);
+  border: 2px solid var(--t-accent, #64ffda);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 0 16px rgba(100, 255, 218, 0.15);
+  animation: roboCardWobble 0.5s ease-in-out infinite alternate;
+  margin-bottom: 8px;
+  z-index: 1;
+}
+@keyframes roboCardWobble {
+  from { transform: rotate(-2deg) translateY(0); }
+  to   { transform: rotate(1.5deg) translateY(-2px); }
+}
+.robo-card-icon {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--t-accent, #64ffda);
+  line-height: 1;
+}
+.robo-card-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+}
+.robo-card-lines span {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--t-text-muted, #9a9ab5);
+  opacity: 0.4;
+}
+.robo-card-lines span:nth-child(1) { width: 32px; }
+.robo-card-lines span:nth-child(2) { width: 24px; }
+.robo-card-lines span:nth-child(3) { width: 28px; }
+
+/* ── Label ── */
+.robo-label {
+  margin-top: 40px;
+  color: var(--t-text-secondary, #b4b4cc);
+  font-size: var(--t-font-size-sm, 13px);
+  letter-spacing: var(--t-tracking-wide, 0.04em);
+  animation: roboLabelPulse 1.5s ease-in-out infinite;
+}
+@keyframes roboLabelPulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .robo-runner  { animation: none; transform: translateX(0); }
+  .robo-body    { animation: none; }
+  .robo-leg,
+  .robo-arm,
+  .robo-antenna-stem,
+  .robo-rope,
+  .robo-card,
+  .robo-track-dashes,
+  .dust-puff    { animation: none; }
+  .dust-puff    { display: none; }
+}
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .notice-card {

@@ -6,6 +6,7 @@ import ScoreReveal from './ScoreReveal';
 import WaveformVisualizer from './WaveformVisualizer';
 import InterviewProgress from './InterviewProgress';
 import InterviewReport from './InterviewReport';
+import RoboFetch from './RoboFetch';
 import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport } from '../api';
 
 function appendTranscript(currentText, incomingText) {
@@ -260,6 +261,15 @@ export default function InterviewSession({
     );
   }
 
+  // Robot loader — replaces entire screen while fetching next question.
+  if (loadingNext) {
+    return (
+      <div className="interview-screen slide-up">
+        <RoboFetch questionNumber={questionNumber + 1} total={totalQuestions} />
+      </div>
+    );
+  }
+
   return (
     <div className="interview-screen slide-up">
       <div className="interview-top">
@@ -450,17 +460,8 @@ export default function InterviewSession({
               onClick={() => void handleNext()}
               disabled={loadingNext}
             >
-              {loadingNext ? (
-                <>
-                  <span className="think-dots" style={{ display: 'inline-flex', gap: 3 }}><span /><span /><span /></span>
-                  {questionNumber >= totalQuestions ? 'Generating report…' : 'Next question…'}
-                </>
-              ) : (
-                <>
-                  {questionNumber >= totalQuestions ? 'Finish & See Report' : 'Next Question'}
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                </>
-              )}
+              {questionNumber >= totalQuestions ? 'Finish & See Report' : 'Next Question'}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </button>
           </div>
         </div>
