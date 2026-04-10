@@ -1268,7 +1268,11 @@ async def generate_knowledge_ladder(
 
 STRUCTURED_Q_SYSTEM = (
     "You are a senior interviewer conducting a structured mock interview. "
-    "Return ONLY a raw JSON object — no markdown, no backticks, no explanation."
+    "Return ONLY a raw JSON object — no markdown, no backticks, no explanation. "
+    "CRITICAL: The 'question' field must be a SHORT, conversational interview question — "
+    "1-3 sentences MAX (under 50 words). Ask ONE focused thing. "
+    "Never write essay-style prompts, multi-part assignments, or paragraphs. "
+    "Think about how a real interviewer speaks across a table: brief, clear, direct."
 )
 
 
@@ -1349,20 +1353,19 @@ TIER: {tier.get('label', tier_key)}
 
 Generate a SPECIFIC interview question about "{topic['topic']}".
 
+CRITICAL LENGTH RULE: The question MUST be 1-3 sentences, under 50 words. Ask ONE thing. No essays, no multi-part assignments.
+
 TIER RULES:
 - Tier 1 (Foundations): Ask "what", "explain", "difference between"
-  Example for "var vs let vs const":
-  → "What is the difference between var, let, and const in JavaScript? Explain scoping, hoisting, and when you'd use each."
+  → "What is the difference between var, let, and const in JavaScript?"
 
 - Tier 2 (Advanced): Ask "how does it work internally", "what happens when", "tradeoffs"
-  Example for "Event Loop":
-  → "Explain how JavaScript's event loop works. What is the difference between the microtask queue and macrotask queue?"
+  → "How does JavaScript's event loop prioritize microtasks over macrotasks?"
 
-- Tier 3 (Practical): Give a REAL scenario to solve
-  Example for "Memory Leak Debugging":
-  → "Your React app's memory usage grows continuously after navigating between pages. Walk me through how you'd identify and fix the leak."
+- Tier 3 (Practical): Give a short, concrete scenario
+  → "Your React app leaks memory when navigating between pages. How would you find and fix it?"
 
-The question MUST mention "{topic['topic']}" by name. Do NOT ask a vague question.
+The question MUST mention "{topic['topic']}" by name. Do NOT ask a vague question. Do NOT write a paragraph — keep it short like a real interviewer would ask verbally.
 
 QUESTIONS ALREADY ASKED (never repeat):
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
@@ -1376,7 +1379,7 @@ Return JSON only:
         system=STRUCTURED_Q_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=256,
         label=f"ladder-{tier_key}",
     )
     result = _parse_question_json(text, tier_key)
@@ -1415,6 +1418,7 @@ QUESTIONS ALREADY ASKED:
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
 
 Ask about a SPECIFIC project from the resume. Focus on decisions, challenges, outcomes, and what they'd change. Do NOT repeat the same project.
+Keep the question SHORT — 1-3 sentences, under 50 words. Ask ONE focused thing like a real interviewer would.
 
 Return JSON only:
 {{"question": "...", "topic": "...", "category": "project_based", "difficulty": "medium", "what_to_evaluate": "..."}}"""
@@ -1425,7 +1429,7 @@ Return JSON only:
         system=STRUCTURED_Q_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=256,
         label="project-q",
     )
     return _parse_question_json(text, "project_based")
@@ -1455,6 +1459,7 @@ QUESTIONS ALREADY ASKED:
 Ask a situational/behavioral question using STAR format expectation.
 Tailor to seniority: junior=learning/adapting, mid=collaboration/ownership,
 senior=influence/mentoring, lead=team performance/strategy.
+Keep the question SHORT — 1-3 sentences, under 50 words. Ask ONE focused thing.
 
 Return JSON only:
 {{"question": "...", "topic": "...", "category": "behavioral", "difficulty": "medium", "what_to_evaluate": "..."}}"""
@@ -1465,7 +1470,7 @@ Return JSON only:
         system=STRUCTURED_Q_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=256,
         label="behavioral-q",
     )
     return _parse_question_json(text, "behavioral")
@@ -1495,7 +1500,7 @@ Return JSON only:
         system=STRUCTURED_Q_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=512,
+        max_tokens=256,
         label="overview-q",
     )
     return _parse_question_json(text, "resume_overview")

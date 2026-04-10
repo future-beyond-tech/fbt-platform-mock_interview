@@ -133,12 +133,15 @@ async def _fetch_ollama_models() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    # Keep per-request timeouts tight: a healthy LLM call returns in 2–6s, so a
-    # 25s read timeout means a stalled upstream (e.g. Gemini overload) bails
-    # fast and the circuit breaker + Groq fallback kick in within seconds
-    # instead of minutes.
+    # LLM inference (especially blueprint extraction with large prompts and
+    # up to 2048 output tokens) can legitimately take 30-90s depending on
+    # provider load.  A too-tight read timeout causes the primary call to
+    # fail *and* starves the fallback chain of time, producing cascading
+    # ReadTimeout errors.  120s read gives a single call plenty of room
+    # while the asyncio.wait_for wrapper in each endpoint still caps total
+    # wall-clock time.
     http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(25.0, connect=5.0, read=25.0, write=25.0),
+        timeout=httpx.Timeout(120.0, connect=10.0, read=120.0, write=10.0),
     )
     _log("[OK] FBT Mock backend ready - multi-provider mode")
 
@@ -515,12 +518,12 @@ async def interview_start(
                 model=chosen_model,
                 resume_text=resume_text,
             ),
-            timeout=30.0,
+            timeout=180.0,
         )
     except ClientInputError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except asyncio.TimeoutError:
-        _log("[interview] blueprint extraction exceeded 12s timeout; using fallback")
+        _log("[interview] blueprint extraction exceeded 180s timeout; using fallback")
         blueprint = None
     except Exception as error:
         _log(f"[interview] blueprint extraction failed: {type(error).__name__}: {error}; using fallback")
