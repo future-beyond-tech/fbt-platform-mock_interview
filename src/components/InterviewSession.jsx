@@ -5,7 +5,8 @@ import Avatar from './Avatar';
 import ScoreReveal from './ScoreReveal';
 import WaveformVisualizer from './WaveformVisualizer';
 import InterviewProgress from './InterviewProgress';
-import { interviewTurn, evaluateAnswer, endInterview } from '../api';
+import InterviewReport from './InterviewReport';
+import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport } from '../api';
 
 function appendTranscript(currentText, incomingText) {
   if (!incomingText) return currentText;
@@ -16,27 +17,39 @@ export default function InterviewSession({
   sessionId,
   initialQuestion,
   initialSection,
+  initialCategory,
+  initialQuestionNumber,
+  totalQuestions,
+  initialWhatToEvaluate,
   initialState,
   initialProfile,
+  initialBlueprint,
   settings,
   groqApiKey,
   onGoStart,
   onComplete,
 }) {
-  // Current turn state
   const [currentQuestion, setCurrentQuestion] = useState(initialQuestion);
   const [currentSection, setCurrentSection] = useState(initialSection || 'Introduction');
+  const [currentCategory, setCurrentCategory] = useState(initialCategory || 'intro');
+  const [questionNumber, setQuestionNumber] = useState(initialQuestionNumber || 1);
+  const [whatToEvaluate, setWhatToEvaluate] = useState(initialWhatToEvaluate || '');
   const [interviewState, setInterviewState] = useState(initialState);
-  const [phase, setPhase] = useState('question'); // question | thinking | result
+  const [phase, setPhase] = useState('question'); // question | thinking | result | report
   const [draftAnswer, setDraftAnswer] = useState('');
   const [submittedAnswer, setSubmittedAnswer] = useState('');
   const [result, setResult] = useState(null);
   const [showIdeal, setShowIdeal] = useState(false);
   const [error, setError] = useState('');
   const [loadingNext, setLoadingNext] = useState(false);
+  const [report, setReport] = useState(null);
+  const [loadingReport, setLoadingReport] = useState(false);
   const [history, setHistory] = useState([
-    { role: 'assistant', section: initialSection || 'Introduction', text: initialQuestion },
+    { role: 'assistant', section: initialSection || 'Introduction', category: initialCategory || 'intro', text: initialQuestion },
   ]);
+
+  // Track answers for the report.
+  const answersRef = useRef([]);
 
   const draftRef = useRef('');
   draftRef.current = draftAnswer;
@@ -73,10 +86,18 @@ export default function InterviewSession({
     setSubmittedAnswer(text);
     setPhase('thinking');
 
+    // Record this answer locally.
+    answersRef.current.push({
+      question: currentQuestion,
+      answer: text,
+      category: currentCategory,
+      questionNumber,
+    });
+
     let evalResult;
     try {
       evalResult = await evaluateAnswer(
-        `interview-${interviewState.questionCount}`,
+        `interview-${questionNumber}`,
         text,
         settings.provider,
         settings.apiKey,
@@ -100,6 +121,13 @@ export default function InterviewSession({
       };
     }
 
+    // Save score to the answers ref for the report.
+    const lastAnswer = answersRef.current[answersRef.current.length - 1];
+    if (lastAnswer) {
+      lastAnswer.score = evalResult.score;
+      lastAnswer.feedback = evalResult.strength;
+    }
+
     setResult(evalResult);
     setPhase('result');
   };
@@ -117,24 +145,33 @@ export default function InterviewSession({
         settings.apiKey,
         settings.model,
       );
-      // Append candidate answer + interviewer response to history
+
+      // Append to history.
       setHistory(prev => [
         ...prev,
-        { role: 'user', text: answerForTurn, score: result?.score },
-        { role: 'assistant', section: data.section, text: data.question },
+        { role: 'user', text: answerForTurn, score: result?.score, category: currentCategory },
+        ...(data.question ? [{ role: 'assistant', section: data.section, category: data.category, text: data.question }] : []),
       ]);
+
+      if (data.completed || !data.question) {
+        // Interview complete — show the report.
+        setInterviewState(data.state);
+        setLoadingNext(false);
+        await handleGenerateReport();
+        return;
+      }
+
       setCurrentQuestion(data.question);
       setCurrentSection(data.section);
+      setCurrentCategory(data.category || 'domain_concept');
+      setQuestionNumber(data.question_number);
+      setWhatToEvaluate(data.what_to_evaluate || '');
       setInterviewState(data.state);
       setDraftAnswer('');
       setSubmittedAnswer('');
       setResult(null);
       setShowIdeal(false);
       setPhase('question');
-
-      if (data.state.completed) {
-        onComplete?.();
-      }
     } catch (e) {
       setError(e.message || 'Failed to fetch the next question.');
     } finally {
@@ -142,8 +179,28 @@ export default function InterviewSession({
     }
   };
 
+  const handleGenerateReport = async () => {
+    setLoadingReport(true);
+    setPhase('report');
+    try {
+      const data = await getInterviewReport(
+        sessionId,
+        settings.provider,
+        settings.apiKey,
+        settings.model,
+      );
+      setReport(data.report);
+    } catch (e) {
+      setError(e.message || 'Failed to generate report.');
+    } finally {
+      setLoadingReport(false);
+    }
+  };
+
   const handleRetry = async () => {
     await cancel();
+    // Remove the last recorded answer since we're retrying.
+    answersRef.current.pop();
     setDraftAnswer('');
     setSubmittedAnswer('');
     setResult(null);
@@ -153,14 +210,14 @@ export default function InterviewSession({
 
   const handleGoStart = async () => {
     await cancel();
+    // If we have answers, show the report before leaving.
+    if (answersRef.current.length > 0 && phase !== 'report') {
+      await handleGenerateReport();
+      return;
+    }
     if (sessionId) await endInterview(sessionId);
     onGoStart();
   };
-
-  // Note: we deliberately do NOT call endInterview() on unmount.
-  // React StrictMode double-mounts in dev, which would delete the session
-  // immediately. Sessions live in memory on the backend and are best-effort
-  // cleaned up when the user clicks "End Interview".
 
   const avatarState =
     phase === 'thinking' ? 'thinking'
@@ -168,6 +225,40 @@ export default function InterviewSession({
         : phase === 'result' && result?.verdict === 'incorrect' ? 'disappointed'
           : (!typingDone && phase === 'question') ? 'speaking'
             : 'idle';
+
+  // Report screen.
+  if (phase === 'report') {
+    return (
+      <div className="interview-screen slide-up">
+        <div className="interview-top">
+          <button className="ghost-btn" type="button" onClick={() => void handleGoStart()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
+            New Interview
+          </button>
+          <div className="interview-meta">
+            <span className="meta-section">Interview Report</span>
+          </div>
+        </div>
+
+        {loadingReport && (
+          <div className="loading" style={{ padding: '48px 0' }}>
+            <div className="think-dots"><span /><span /><span /></div>
+            <p>Generating your interview report...</p>
+          </div>
+        )}
+
+        {error && !loadingReport && <div className="inline-error" style={{ margin: '24px 0' }}>{error}</div>}
+
+        {report && !loadingReport && (
+          <InterviewReport
+            report={report}
+            blueprint={initialBlueprint}
+            onNewInterview={() => void handleGoStart()}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="interview-screen slide-up">
@@ -179,13 +270,19 @@ export default function InterviewSession({
         <div className="interview-meta">
           <span className="meta-section">{currentSection}</span>
           <span className="meta-divider">·</span>
-          <span className="meta-progress">Q{interviewState.questionCount}</span>
+          <span className="meta-progress">Q{questionNumber}/{totalQuestions}</span>
         </div>
       </div>
 
-      <InterviewProgress state={interviewState} profile={initialProfile} />
+      <InterviewProgress
+        questionNumber={questionNumber}
+        totalQuestions={totalQuestions}
+        category={currentCategory}
+        profile={initialProfile}
+        blueprint={initialBlueprint}
+      />
 
-      {/* Conversation history (collapsed bubbles for previous turns) */}
+      {/* Conversation history */}
       {history.length > 1 && (
         <div className="iv-history">
           {history.slice(0, -1).map((m, i) => (
@@ -209,12 +306,15 @@ export default function InterviewSession({
         <div className="interviewer-bubble">
           <div className="bubble-tags">
             <span className="bubble-tag">{currentSection}</span>
-            <span className="bubble-tag">⭐ Lvl {interviewState.difficultyLevel}</span>
+            <span className="bubble-tag">Q{questionNumber}/{totalQuestions}</span>
           </div>
           <p className="bubble-text" onClick={!typingDone ? skipTyping : undefined}>
             {typedQuestion}
             {!typingDone && <span className="cursor-blink">|</span>}
           </p>
+          {whatToEvaluate && typingDone && (
+            <p className="bubble-eval-hint">Evaluating: {whatToEvaluate}</p>
+          )}
           {!typingDone && <p className="tap-hint">tap to skip animation</p>}
         </div>
       </div>
@@ -224,6 +324,7 @@ export default function InterviewSession({
           <div className="voice-controls">
             <WaveformVisualizer active={isRecording} />
             <span className="voice-label" aria-live="polite">
+              {isRecording && <span className="pulse-dot" />}
               {isTranscribing ? 'Transcribing...' : label}
             </span>
             {mode !== 'none' && hasMic && (
@@ -244,7 +345,7 @@ export default function InterviewSession({
           </div>
           {voiceError && <div className="inline-error">{voiceError}</div>}
           <textarea
-            key={interviewState.questionCount}
+            key={questionNumber}
             className="answer-input"
             placeholder="Type or speak your answer..."
             autoFocus
@@ -352,11 +453,11 @@ export default function InterviewSession({
               {loadingNext ? (
                 <>
                   <span className="think-dots" style={{ display: 'inline-flex', gap: 3 }}><span /><span /><span /></span>
-                  Next question…
+                  {questionNumber >= totalQuestions ? 'Generating report…' : 'Next question…'}
                 </>
               ) : (
                 <>
-                  Next Question
+                  {questionNumber >= totalQuestions ? 'Finish & See Report' : 'Next Question'}
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                 </>
               )}

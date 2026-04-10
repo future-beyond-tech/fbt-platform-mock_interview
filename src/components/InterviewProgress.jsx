@@ -1,62 +1,79 @@
-const PHASES = [
-  { id: 'introduction', label: 'Intro' },
-  { id: 'project_deep_dive', label: 'Projects' },
-  { id: 'skill_basic', label: 'Core' },
-  { id: 'skill_intermediate', label: 'Intermediate' },
-  { id: 'skill_advanced', label: 'Advanced' },
-  { id: 'wrap_up', label: 'Wrap' },
+// Maps each question position (1-12) to its type for display.
+const Q_LABELS = [
+  { short: 'I',  label: 'Intro' },          // Q1
+  { short: 'R',  label: 'Resume' },         // Q2
+  { short: 'T1', label: 'Tier 1' },         // Q3
+  { short: 'T1', label: 'Tier 1' },         // Q4
+  { short: 'P',  label: 'Project' },        // Q5
+  { short: 'T2', label: 'Tier 2' },         // Q6
+  { short: 'T2', label: 'Tier 2' },         // Q7
+  { short: 'B',  label: 'Behavioral' },     // Q8
+  { short: 'T2', label: 'Tier 2' },         // Q9
+  { short: 'T3', label: 'Tier 3' },         // Q10
+  { short: 'T3', label: 'Tier 3' },         // Q11
+  { short: 'W',  label: 'Wrap' },           // Q12
 ];
 
-export default function InterviewProgress({ state, profile }) {
-  const activeIndex = PHASES.findIndex(p => p.id === state.phase);
+const TIER_COLORS = {
+  T1: 'var(--accent)',
+  T2: '#ffd93d',
+  T3: '#ff6b6b',
+};
+
+export default function InterviewProgress({ questionNumber, totalQuestions, category, profile, blueprint }) {
+  const progress = ((questionNumber - 1) / Math.max(totalQuestions - 1, 1)) * 100;
 
   return (
     <div className="iv-progress">
-      {profile && (
+      {(profile || blueprint) && (
         <div className="iv-profile-row">
           <div className="iv-profile-block">
-            <span className="iv-profile-role">{profile.roles?.[0] || 'Professional'}</span>
+            <span className="iv-profile-role">
+              {blueprint?.candidate_name || profile?.roles?.[0] || 'Candidate'}
+            </span>
             <span className="iv-profile-meta">
-              {profile.domain} · {profile.experienceLevel} · {profile.yearsOfExperience} yrs
-              {profile.isTechnical ? ' · technical' : ' · non-technical'}
+              {blueprint?.primary_domain || profile?.domain || 'General'}
+              {' · '}
+              {blueprint?.seniority_level || profile?.experienceLevel || 'mid'}
+              {' · '}
+              {blueprint?.experience_years ?? profile?.yearsOfExperience ?? 0} yrs
             </span>
           </div>
         </div>
       )}
 
-      <div className="iv-phase-bar">
-        {PHASES.map((p, i) => {
-          const isActive = i === activeIndex;
-          const isPast = i < activeIndex;
+      {/* Progress bar */}
+      <div className="iv-progress-bar-wrap">
+        <div className="iv-progress-bar">
+          <div className="iv-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+        <span className="iv-progress-label">Q{questionNumber} of {totalQuestions}</span>
+      </div>
+
+      {/* Question dots with tier labels */}
+      <div className="iv-dots-row">
+        {Array.from({ length: totalQuestions }, (_, i) => {
+          const qNum = i + 1;
+          const isActive = qNum === questionNumber;
+          const isPast = qNum < questionNumber;
+          const meta = Q_LABELS[i] || { short: `${qNum}`, label: `Q${qNum}` };
+          const tierColor = TIER_COLORS[meta.short] || undefined;
           return (
             <div
-              key={p.id}
-              className={`iv-phase-chip${isActive ? ' active' : ''}${isPast ? ' past' : ''}`}
+              key={i}
+              className={`iv-dot${isActive ? ' active' : ''}${isPast ? ' past' : ''}`}
+              title={`Q${qNum}: ${meta.label}`}
+              style={isActive && tierColor ? { borderColor: tierColor, boxShadow: `0 0 0 3px ${tierColor}22` } : undefined}
             >
-              <span className="iv-phase-dot" />
-              <span className="iv-phase-label">{p.label}</span>
+              <span
+                className="iv-dot-num"
+                style={isActive && tierColor ? { color: tierColor } : undefined}
+              >
+                {meta.short}
+              </span>
             </div>
           );
         })}
-      </div>
-
-      <div className="iv-meta-row">
-        <div className="iv-difficulty" title="Difficulty level">
-          {'⭐'.repeat(state.difficultyLevel)}
-          <span className="iv-difficulty-text">Lvl {state.difficultyLevel}</span>
-        </div>
-
-        {state.extractedSkills.length > 0 && (
-          <div className="iv-skills">
-            <span className="iv-skills-label">Skills:</span>
-            {state.extractedSkills.slice(0, 6).map(skill => (
-              <span key={skill} className="iv-skill-tag">{skill}</span>
-            ))}
-            {state.extractedSkills.length > 6 && (
-              <span className="iv-skill-tag iv-skill-more">+{state.extractedSkills.length - 6}</span>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

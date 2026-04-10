@@ -38,13 +38,19 @@ from pydantic import BaseModel
 
 from questions import QUESTIONS, SESSIONS
 from providers import (
+    CATEGORY_LABELS,
     ClientInputError,
     ProviderResponseError,
+    clean_transcript,
     evaluate_with_provider,
+    extract_interview_blueprint,
     extract_insights_from_answer,
     extract_profile_from_resume,
+    generate_knowledge_ladder,
     generate_question_from_file,
     generate_questions_with_provider,
+    generate_session_report,
+    generate_structured_question,
     interview_next_question,
     resolve_api_key,
 )
@@ -392,6 +398,37 @@ async def transcribe(
         raise HTTPException(status_code=502, detail=f"Transcription failed: {str(error)}")
 
 
+class CleanTranscriptRequest(BaseModel):
+    raw_transcript: str
+    provider: str = "groq"
+    api_key: str = ""
+    model: str = ""
+
+
+@app.post("/api/clean-transcript")
+async def clean_transcript_endpoint(req: CleanTranscriptRequest):
+    """Clean up a raw speech-to-text transcript via LLM."""
+    if not req.raw_transcript.strip():
+        return {"text": ""}
+
+    try:
+        cleaned = await clean_transcript(
+            client=http_client,
+            provider=req.provider,
+            api_key=req.api_key,
+            model=req.model,
+            raw_transcript=req.raw_transcript,
+        )
+    except ClientInputError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        # Non-fatal: return the raw transcript if cleanup fails.
+        _log(f"[clean-transcript] cleanup failed: {error}")
+        return {"text": req.raw_transcript}
+
+    return {"text": cleaned}
+
+
 @app.post("/api/generate-from-file")
 async def generate_from_file(
     file: UploadFile = File(...),
@@ -427,32 +464,11 @@ async def generate_from_file(
     return {"questions": [question]}
 
 
-# ── Interview (multi-turn conversational) ──
+# ── Interview (structured 12-question) ──
 import uuid
 
 INTERVIEW_SESSIONS: dict[str, dict] = {}
-MAX_INTERVIEW_TURNS = 14
-
-
-def _initial_interview_state() -> dict:
-    return {
-        "phase": "introduction",
-        "questionCount": 0,
-        "extractedSkills": [],
-        "extractedProjects": [],
-        "questionsAsked": [],
-        "difficultyLevel": 1,
-        "lastAnswerQuality": None,
-        "completed": False,
-    }
-
-
-def _next_difficulty(current: int, quality: str | None) -> int:
-    if quality == "strong":
-        return min(current + 1, 3)
-    if quality == "weak":
-        return max(current - 1, 1)
-    return current
+TOTAL_QUESTIONS = 12
 
 
 class InterviewTurnRequest(BaseModel):
@@ -470,7 +486,7 @@ async def interview_start(
     api_key: str = Form(""),
     model: str = Form(""),
 ):
-    """Upload a resume PDF, create an interview session, return the opening question."""
+    """Upload a resume PDF, extract blueprint, return Q1 (intro)."""
     file_bytes = await file.read()
     content_type = file.content_type or ""
     filename = file.filename or ""
@@ -490,98 +506,123 @@ async def interview_start(
 
     chosen_model = model or "gemma-3-12b-it"
 
-    # Step 1: extract a structured profile (domain, role, experience, isTechnical, ...).
-    # This is best-effort — if the LLM is slow or flaky, we bail out within a
-    # hard 8s wall-clock budget and proceed with a generic profile so the user
-    # isn't stuck watching the loader while the opening question is still
-    # gated on profile extraction.
+    # Extract the interview blueprint (rich profile + domain concepts).
     try:
-        profile = await asyncio.wait_for(
-            extract_profile_from_resume(
+        blueprint = await asyncio.wait_for(
+            extract_interview_blueprint(
                 client=http_client,
                 provider=provider,
                 api_key=api_key,
                 model=chosen_model,
                 resume_text=resume_text,
             ),
-            timeout=8.0,
+            timeout=30.0,
         )
     except ClientInputError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except asyncio.TimeoutError:
-        _log("[interview] profile extraction exceeded 8s budget; using generic profile")
-        profile = {
-            "domain": "General Professional",
-            "roles": ["Professional"],
-            "yearsOfExperience": 0,
-            "experienceLevel": "mid",
-            "isTechnical": True,
-            "topSkills": [],
-            "notableProjects": [],
-        }
+        _log("[interview] blueprint extraction exceeded 12s timeout; using fallback")
+        blueprint = None
     except Exception as error:
-        # Profile extraction is best-effort — fall back to a generic profile.
-        _log(f"[interview] profile extraction failed (non-fatal): {error}")
-        profile = {
-            "domain": "General Professional",
-            "roles": ["Professional"],
-            "yearsOfExperience": 0,
-            "experienceLevel": "mid",
-            "isTechnical": True,
-            "topSkills": [],
-            "notableProjects": [],
+        _log(f"[interview] blueprint extraction failed: {type(error).__name__}: {error}; using fallback")
+        blueprint = None
+
+    if blueprint is None:
+        blueprint = {
+            "candidate_name": "Candidate",
+            "primary_domain": "General Professional",
+            "experience_years": 0,
+            "seniority_level": "mid",
+            "is_technical": True,
+            "core_skills": [],
+            "tools_and_technologies": [],
+            "domain_core_concepts": [],
+            "notable_projects": [],
+            "career_summary": "",
+            "behavioral_themes": [],
         }
 
-    state = _initial_interview_state()
-    # Seed the live state with what we already learned from the resume.
-    state["extractedSkills"] = list(profile.get("topSkills") or [])
-    state["extractedProjects"] = list(profile.get("notableProjects") or [])
-
+    # Generate the knowledge ladder (3-tier progressive topics).
     try:
-        opening = await interview_next_question(
-            client=http_client,
-            provider=provider,
-            api_key=api_key,
-            model=chosen_model,
-            state=state,
-            resume_text=resume_text,
-            history=[],
-            profile=profile,
+        ladder = await asyncio.wait_for(
+            generate_knowledge_ladder(
+                client=http_client,
+                provider=provider,
+                api_key=api_key,
+                model=chosen_model,
+                resume_text=resume_text,
+                blueprint=blueprint,
+            ),
+            timeout=30.0,
         )
-    except ClientInputError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    except ProviderResponseError as error:
-        raise HTTPException(status_code=422, detail=str(error))
-    except httpx.HTTPStatusError as error:
-        raise HTTPException(status_code=502, detail=f"Interview start failed: {_http_error_detail(error)}")
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Interview start failed: {str(error)}")
+        _log(f"[interview] ladder generation failed: {type(error).__name__}: {error}; using empty ladder")
+        ladder = {
+            "tier_1": {"level": "foundational", "label": "Foundations", "description": "", "topics": []},
+            "tier_2": {"level": "advanced", "label": "Advanced", "description": "", "topics": []},
+            "tier_3": {"level": "expert_practical", "label": "Expert", "description": "", "topics": []},
+        }
 
-    state["questionsAsked"].append(opening)
-    state["questionCount"] = 1
+    # Build a profile dict from the blueprint for backwards-compat with eval prompts.
+    profile = {
+        "domain": blueprint["primary_domain"],
+        "roles": [blueprint.get("seniority_level", "mid") + " " + blueprint["primary_domain"]],
+        "yearsOfExperience": blueprint["experience_years"],
+        "experienceLevel": blueprint["seniority_level"],
+        "isTechnical": blueprint.get("is_technical", True),
+        "topSkills": blueprint.get("core_skills", []),
+        "notableProjects": [p.get("name", "") for p in blueprint.get("notable_projects", [])],
+    }
+
+    # Q1 is always the fixed intro question.
+    from providers import get_intro_question
+    q1 = get_intro_question()
+
+    session_state = {
+        "questionCount": 1,
+        "currentQuestionNumber": 1,
+        "totalQuestions": TOTAL_QUESTIONS,
+        "questionsAsked": [q1["question"]],
+        "askedTopics": [q1["topic"]],
+        "askedProjects": [],
+        "tierCounters": {"tier_1": 0, "tier_2": 0, "tier_3": 0},
+        "answers": [],
+        "completed": False,
+    }
 
     session_id = uuid.uuid4().hex
     INTERVIEW_SESSIONS[session_id] = {
         "resume_text": resume_text,
-        "history": [{"role": "assistant", "content": opening}],
-        "state": state,
+        "blueprint": blueprint,
+        "ladder": ladder,
         "profile": profile,
+        "state": session_state,
         "provider": provider,
         "model": chosen_model,
     }
 
     return {
         "session_id": session_id,
-        "question": opening,
-        "section": "Introduction",
-        "state": state,
+        "question": q1["question"],
+        "category": q1["category"],
+        "section": CATEGORY_LABELS.get(q1["category"], "Introduction"),
+        "question_number": 1,
+        "total_questions": TOTAL_QUESTIONS,
+        "what_to_evaluate": q1["what_to_evaluate"],
+        "state": session_state,
         "profile": profile,
+        "blueprint": {
+            "candidate_name": blueprint.get("candidate_name", "Candidate"),
+            "primary_domain": blueprint["primary_domain"],
+            "seniority_level": blueprint["seniority_level"],
+            "experience_years": blueprint["experience_years"],
+        },
     }
 
 
 @app.post("/api/interview/turn")
 async def interview_turn(req: InterviewTurnRequest):
-    """Submit a candidate answer; receive the next interviewer question + updated state."""
+    """Submit answer to current Q, score it, return the next question."""
     session = INTERVIEW_SESSIONS.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Interview session not found or expired.")
@@ -591,86 +632,121 @@ async def interview_turn(req: InterviewTurnRequest):
         raise HTTPException(status_code=400, detail="Answer is required.")
 
     state = session["state"]
-    history: list[dict] = session["history"]
-    resume_text: str = session["resume_text"]
-    profile: dict | None = session.get("profile")
-    # Allow per-turn override but fall back to session defaults.
+    blueprint = session["blueprint"]
+    profile = session.get("profile")
     provider = req.provider or session["provider"]
     model = req.model or session["model"]
-    api_key = req.api_key
+    current_q_num = state["currentQuestionNumber"]
 
-    history.append({"role": "user", "content": answer})
+    # Record this answer.
+    last_q = state["questionsAsked"][-1] if state["questionsAsked"] else ""
+    state["answers"].append({
+        "question": last_q,
+        "answer": answer,
+        "category": "",  # will be enriched below
+        "score": None,
+        "feedback": "",
+    })
 
-    # Step 1: extract insights from this answer (lightweight, may fail gracefully)
+    # Generate the NEXT question.
+    next_q_num = current_q_num + 1
+
+    if next_q_num > TOTAL_QUESTIONS:
+        state["completed"] = True
+        return {
+            "question": None,
+            "category": "completed",
+            "section": "Completed",
+            "question_number": next_q_num,
+            "total_questions": TOTAL_QUESTIONS,
+            "what_to_evaluate": "",
+            "state": state,
+            "completed": True,
+        }
+
+    ladder = session.get("ladder")
+
     try:
-        insights = await extract_insights_from_answer(
+        q_data = await generate_structured_question(
             client=http_client,
             provider=provider,
-            api_key=api_key,
-            model="gemma-3-4b-it" if provider == "gemini" else model,
-            answer=answer,
-            state=state,
-        )
-    except Exception as error:
-        _log(f"[interview] extract failed (non-fatal): {error}")
-        insights = {"newSkills": [], "newProjects": [], "answerQuality": "average",
-                    "confidence": "medium", "suggestedNextPhase": None}
-
-    # Merge insights
-    state["extractedSkills"] = list(dict.fromkeys(state["extractedSkills"] + insights["newSkills"]))
-    state["extractedProjects"] = list(dict.fromkeys(state["extractedProjects"] + insights["newProjects"]))
-    state["lastAnswerQuality"] = insights["answerQuality"]
-    state["difficultyLevel"] = _next_difficulty(state["difficultyLevel"], insights["answerQuality"])
-    if insights["suggestedNextPhase"]:
-        state["phase"] = insights["suggestedNextPhase"]
-
-    # Force wrap-up if we hit the cap
-    if state["questionCount"] >= MAX_INTERVIEW_TURNS:
-        state["phase"] = "wrap_up"
-
-    # Step 2: generate next question (or closing message if wrap_up reached)
-    try:
-        next_question = await interview_next_question(
-            client=http_client,
-            provider=provider,
-            api_key=api_key,
+            api_key=req.api_key,
             model=model,
-            state=state,
-            resume_text=resume_text,
-            history=history,
-            profile=profile,
+            blueprint=blueprint,
+            question_number=next_q_num,
+            total_questions=TOTAL_QUESTIONS,
+            session_state=state,
+            ladder=ladder,
         )
     except ClientInputError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except ProviderResponseError as error:
         raise HTTPException(status_code=422, detail=str(error))
     except httpx.HTTPStatusError as error:
-        raise HTTPException(status_code=502, detail=f"Interview turn failed: {_http_error_detail(error)}")
+        raise HTTPException(status_code=502, detail=f"Question generation failed: {_http_error_detail(error)}")
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Interview turn failed: {str(error)}")
+        raise HTTPException(status_code=502, detail=f"Question generation failed: {str(error)}")
 
-    history.append({"role": "assistant", "content": next_question})
-    state["questionsAsked"].append(next_question)
-    state["questionCount"] += 1
+    state["currentQuestionNumber"] = next_q_num
+    state["questionCount"] = next_q_num
+    state["questionsAsked"].append(q_data["question"])
+    state["askedTopics"].append(q_data.get("topic", ""))
 
-    # Mark complete if we just delivered the wrap-up message
-    if state["phase"] == "wrap_up" and state["questionCount"] >= MAX_INTERVIEW_TURNS:
-        state["completed"] = True
+    # Track project names if project-based.
+    if q_data.get("category") == "project_based" and q_data.get("topic"):
+        state["askedProjects"].append(q_data["topic"])
 
-    section_map = {
-        "introduction": "Introduction",
-        "project_deep_dive": "Project Deep Dive",
-        "skill_basic": "Core Skills",
-        "skill_intermediate": "Intermediate",
-        "skill_advanced": "Advanced",
-        "wrap_up": "Wrap Up",
-    }
+    category = q_data.get("category", "domain_concept")
+    section = CATEGORY_LABELS.get(category, category.replace("_", " ").title())
 
     return {
-        "question": next_question,
-        "section": section_map.get(state["phase"], "Interview"),
+        "question": q_data["question"],
+        "category": category,
+        "section": section,
+        "question_number": next_q_num,
+        "total_questions": TOTAL_QUESTIONS,
+        "what_to_evaluate": q_data.get("what_to_evaluate", ""),
+        "difficulty": q_data.get("difficulty", "medium"),
         "state": state,
+        "completed": False,
     }
+
+
+class InterviewReportRequest(BaseModel):
+    session_id: str
+    provider: str = "gemini"
+    api_key: str = ""
+    model: str = ""
+
+
+@app.post("/api/interview/report")
+async def interview_report(req: InterviewReportRequest):
+    """Generate the end-of-session performance report."""
+    session = INTERVIEW_SESSIONS.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found or expired.")
+
+    blueprint = session["blueprint"]
+    answers = session["state"].get("answers", [])
+    provider = req.provider or session["provider"]
+    model = req.model or session["model"]
+
+    try:
+        report = await generate_session_report(
+            client=http_client,
+            provider=provider,
+            api_key=req.api_key,
+            model=model,
+            blueprint=blueprint,
+            answers=answers,
+        )
+    except ClientInputError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        _log(f"[interview] report generation failed: {error}")
+        raise HTTPException(status_code=502, detail=f"Report generation failed: {str(error)}")
+
+    return {"report": report}
 
 
 @app.post("/api/interview/end")

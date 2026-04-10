@@ -171,6 +171,7 @@ export default function SessionScreen({
               <WaveformVisualizer active={isRecording} />
             </Suspense>
             <span className="voice-label" aria-live="polite">
+              {isRecording && <span className="pulse-dot" />}
               {isTranscribing ? 'Transcribing...' : label}
             </span>
             {mode !== 'none' && hasMic && (

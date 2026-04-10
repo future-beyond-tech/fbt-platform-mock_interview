@@ -1063,6 +1063,624 @@ async def interview_next_question(
     return text.strip()
 
 
+# ─── Structured 12-question interview with Knowledge Ladder ──
+
+# Session flow: position → (type, source)
+SESSION_FLOW: list[tuple[str, str]] = [
+    # (type,              source)
+    ("intro",             "fixed"),       # Q1
+    ("resume_overview",   "fixed"),       # Q2
+    ("tier_1",            "ladder"),      # Q3  — Foundational
+    ("tier_1",            "ladder"),      # Q4  — Foundational
+    ("project_based",     "resume"),      # Q5
+    ("tier_2",            "ladder"),      # Q6  — Advanced
+    ("tier_2",            "ladder"),      # Q7  — Advanced
+    ("behavioral",        "dynamic"),     # Q8
+    ("tier_2",            "ladder"),      # Q9  — Advanced
+    ("tier_3",            "ladder"),      # Q10 — Expert Practical
+    ("tier_3",            "ladder"),      # Q11 — Expert Practical
+    ("wrap",              "fixed"),       # Q12
+]
+
+
+CATEGORY_LABELS: dict[str, str] = {
+    "intro": "Introduction",
+    "resume_overview": "Career Overview",
+    "tier_1": "Tier 1 · Foundations",
+    "tier_2": "Tier 2 · Advanced",
+    "tier_3": "Tier 3 · Expert",
+    "project_based": "Project Deep Dive",
+    "behavioral": "Behavioral",
+    "wrap": "Wrap Up",
+}
+
+
+def get_intro_question() -> dict:
+    return {
+        "question": (
+            "Tell me about yourself — walk me through your background, "
+            "what you've been working on, and what brings you here today."
+        ),
+        "topic": "introduction",
+        "category": "intro",
+        "difficulty": "easy",
+        "what_to_evaluate": "Communication clarity, career narrative, confidence, and relevance.",
+    }
+
+
+def get_wrap_question() -> dict:
+    return {
+        "question": (
+            "That wraps up my questions. Do you have anything you'd like "
+            "to ask me, or is there anything about your experience you feel "
+            "we didn't get to cover?"
+        ),
+        "topic": "wrap_up",
+        "category": "wrap",
+        "difficulty": "easy",
+        "what_to_evaluate": "Curiosity, self-awareness, and ability to advocate for themselves.",
+    }
+
+
+# ── Knowledge Ladder generation ──
+
+KNOWLEDGE_LADDER_SYSTEM = (
+    "You are an expert curriculum designer and senior interviewer. "
+    "Return ONLY raw JSON — no markdown, no backticks, no commentary."
+)
+
+
+def build_knowledge_ladder_prompt(resume_text: str, blueprint: dict) -> str:
+    skills = ", ".join(blueprint.get("core_skills") or []) or "N/A"
+    return f"""Analyse this candidate's resume and generate a PROGRESSIVE KNOWLEDGE LADDER
+for their interview. The ladder must go from foundational → advanced → practical.
+
+RESUME:
+\"\"\"
+{resume_text[:4000]}
+\"\"\"
+
+SENIORITY LEVEL: {blueprint.get('seniority_level', 'mid')}
+PRIMARY DOMAIN: {blueprint.get('primary_domain', 'General')}
+CORE SKILLS: {skills}
+
+Generate a knowledge ladder with exactly 3 tiers.
+Each tier has 4-5 specific topics to test.
+Topics must be:
+  - Specific to their domain (not generic)
+  - Progressive — each tier harder than the last
+  - Mix of theory AND practical application
+  - Completely independent of their resume content (test knowledge, not just what they've done)
+
+Return JSON only:
+{{
+  "tier_1": {{
+    "level": "foundational",
+    "label": "Core Fundamentals",
+    "description": "Basic definitions, terminology, core concepts",
+    "topics": [
+      {{"topic": "...", "depth": "...", "sample_question_angle": "..."}}
+    ]
+  }},
+  "tier_2": {{
+    "level": "advanced",
+    "label": "Advanced Concepts",
+    "description": "How and why things work, tradeoffs, design decisions",
+    "topics": [
+      {{"topic": "...", "depth": "...", "sample_question_angle": "..."}}
+    ]
+  }},
+  "tier_3": {{
+    "level": "expert_practical",
+    "label": "Real-World Problem Solving",
+    "description": "Complex scenarios, debugging, architecture, scale",
+    "topics": [
+      {{"topic": "...", "depth": "...", "sample_question_angle": "..."}}
+    ]
+  }}
+}}"""
+
+
+async def generate_knowledge_ladder(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    resume_text: str,
+    blueprint: dict,
+) -> dict:
+    """Generate a 3-tier knowledge ladder from the resume."""
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=KNOWLEDGE_LADDER_SYSTEM,
+        messages=[{"role": "user", "content": build_knowledge_ladder_prompt(resume_text, blueprint)}],
+        temperature=0.2,
+        max_tokens=1536,
+        label="ladder",
+    )
+    cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end <= start:
+        raise ProviderResponseError(f"No JSON in ladder response: {repr(text[:150])}")
+    try:
+        data = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError as error:
+        raise ProviderResponseError(f"Could not parse ladder JSON: {error.msg}") from error
+
+    # Normalise each tier.
+    result = {}
+    for tier_key in ("tier_1", "tier_2", "tier_3"):
+        tier = data.get(tier_key) or {}
+        topics = []
+        for t in (tier.get("topics") or [])[:5]:
+            if isinstance(t, dict) and t.get("topic"):
+                topics.append({
+                    "topic": str(t["topic"]).strip(),
+                    "depth": str(t.get("depth", "")).strip(),
+                    "sample_question_angle": str(t.get("sample_question_angle", "")).strip(),
+                })
+        result[tier_key] = {
+            "level": str(tier.get("level", tier_key)).strip(),
+            "label": str(tier.get("label", tier_key)).strip(),
+            "description": str(tier.get("description", "")).strip(),
+            "topics": topics,
+        }
+    return result
+
+
+# ── Question generators for each source type ──
+
+STRUCTURED_Q_SYSTEM = (
+    "You are a senior interviewer conducting a structured mock interview. "
+    "Return ONLY a raw JSON object — no markdown, no backticks, no explanation."
+)
+
+
+def _parse_question_json(text: str, fallback_category: str) -> dict:
+    """Parse a JSON question from LLM output, with a graceful fallback."""
+    cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    fallback = {
+        "question": text.strip(),
+        "topic": fallback_category,
+        "category": fallback_category,
+        "difficulty": "medium",
+        "what_to_evaluate": "",
+    }
+    if start == -1 or end <= start:
+        return fallback
+    try:
+        data = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return fallback
+    return {
+        "question": str(data.get("question", text)).strip(),
+        "topic": str(data.get("topic", fallback_category)).strip(),
+        "category": str(data.get("category", fallback_category)).strip(),
+        "difficulty": str(data.get("difficulty", "medium")).strip(),
+        "what_to_evaluate": str(data.get("what_to_evaluate", "")).strip(),
+    }
+
+
+async def _generate_ladder_question(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+    ladder: dict,
+    tier_key: str,
+    topic_index: int,
+    session_state: dict,
+) -> dict:
+    """Generate one question from a specific tier of the knowledge ladder."""
+    tier = ladder.get(tier_key, {})
+    topics = tier.get("topics") or []
+    if not topics:
+        # Fallback if no ladder topics available.
+        return {
+            "question": f"Tell me about a core concept in {blueprint.get('primary_domain', 'your field')} that you think is underappreciated.",
+            "topic": tier_key,
+            "category": tier_key,
+            "difficulty": "medium",
+            "what_to_evaluate": "Domain knowledge depth",
+        }
+
+    asked_topics = session_state.get("askedTopics") or []
+    # Find an untested topic.
+    topic = None
+    for t in topics:
+        if t["topic"] not in asked_topics:
+            topic = t
+            break
+    if not topic:
+        topic = topics[topic_index % len(topics)]
+
+    asked_qs = session_state.get("questionsAsked") or []
+    prompt = f"""CANDIDATE PROFILE:
+- Domain: {blueprint.get('primary_domain', 'General')}
+- Seniority: {blueprint.get('seniority_level', 'mid')}
+- Experience: {blueprint.get('experience_years', 0)} years
+
+CURRENT TIER: {tier.get('label', tier_key)}
+TIER LEVEL: {tier.get('level', 'conceptual')}
+TIER DESCRIPTION: {tier.get('description', '')}
+
+TOPIC TO ASK ABOUT: {topic['topic']}
+TOPIC DEPTH: {topic.get('depth', 'appropriate to tier')}
+QUESTION ANGLE HINT: {topic.get('sample_question_angle', '')}
+
+QUESTIONS ALREADY ASKED (never repeat or ask anything similar):
+{chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
+
+Generate exactly 1 question for this topic at the specified depth.
+Rules:
+- For Tier 1: test understanding — "explain", "what is", "how does X work"
+- For Tier 2: test application — "how would you", "what are the tradeoffs", "when would you"
+- For Tier 3: test expertise — real scenarios, debugging, design decisions, optimization
+- NEVER ask resume-based questions here — this tests pure knowledge
+
+Return JSON only:
+{{"question": "...", "topic": "{topic['topic']}", "tier": "{tier.get('label', tier_key)}", "category": "{tier_key}", "difficulty": "easy|medium|hard", "what_to_evaluate": "what a strong answer must include"}}"""
+
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=STRUCTURED_Q_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512,
+        label=f"ladder-{tier_key}",
+    )
+    result = _parse_question_json(text, tier_key)
+    result["category"] = tier_key  # ensure tier category is correct
+    return result
+
+
+async def _generate_project_question(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+    session_state: dict,
+) -> dict:
+    """Generate a project deep-dive question from the resume."""
+    projects = blueprint.get("notable_projects") or []
+    asked_projects = session_state.get("askedProjects") or []
+    asked_qs = session_state.get("questionsAsked") or []
+
+    proj_lines = "\n".join(
+        f"- {p.get('name', 'Unnamed')}: {p.get('description', '')} | Impact: {p.get('impact', 'N/A')}"
+        for p in projects
+    ) or "No specific projects listed — ask about general work experience."
+
+    prompt = f"""CANDIDATE: {blueprint.get('candidate_name', 'Candidate')}
+DOMAIN: {blueprint.get('primary_domain', 'General')}
+SENIORITY: {blueprint.get('seniority_level', 'mid')}
+
+PROJECTS AVAILABLE:
+{proj_lines}
+
+PROJECTS ALREADY ASKED ABOUT: {', '.join(asked_projects) or 'None yet'}
+
+QUESTIONS ALREADY ASKED:
+{chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
+
+Ask about a SPECIFIC project from the resume. Focus on decisions, challenges, outcomes, and what they'd change. Do NOT repeat the same project.
+
+Return JSON only:
+{{"question": "...", "topic": "...", "category": "project_based", "difficulty": "medium", "what_to_evaluate": "..."}}"""
+
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=STRUCTURED_Q_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512,
+        label="project-q",
+    )
+    return _parse_question_json(text, "project_based")
+
+
+async def _generate_behavioral_question(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+    session_state: dict,
+) -> dict:
+    """Generate a behavioral/STAR question tailored to seniority."""
+    asked_qs = session_state.get("questionsAsked") or []
+    themes = blueprint.get("behavioral_themes") or []
+
+    prompt = f"""CANDIDATE: {blueprint.get('candidate_name', 'Candidate')}
+DOMAIN: {blueprint.get('primary_domain', 'General')}
+SENIORITY: {blueprint.get('seniority_level', 'mid')}
+EXPERIENCE: {blueprint.get('experience_years', 0)} years
+BEHAVIORAL THEMES FROM RESUME: {', '.join(themes) or 'None detected'}
+
+QUESTIONS ALREADY ASKED:
+{chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
+
+Ask a situational/behavioral question using STAR format expectation.
+Tailor to seniority: junior=learning/adapting, mid=collaboration/ownership,
+senior=influence/mentoring, lead=team performance/strategy.
+
+Return JSON only:
+{{"question": "...", "topic": "...", "category": "behavioral", "difficulty": "medium", "what_to_evaluate": "..."}}"""
+
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=STRUCTURED_Q_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512,
+        label="behavioral-q",
+    )
+    return _parse_question_json(text, "behavioral")
+
+
+async def _generate_resume_overview_question(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+) -> dict:
+    """Generate one light career overview question."""
+    prompt = f"""You are a senior interviewer. Ask ONE warm-up question about this candidate's
+overall career journey. Keep it broad and conversational.
+
+Domain: {blueprint.get('primary_domain', 'General')}
+Seniority: {blueprint.get('seniority_level', 'mid')}
+Career Summary: {blueprint.get('career_summary', 'Not provided')}
+
+Return JSON only:
+{{"question": "...", "topic": "career_overview", "category": "resume_overview", "difficulty": "easy", "what_to_evaluate": "..."}}"""
+
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=STRUCTURED_Q_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=512,
+        label="overview-q",
+    )
+    return _parse_question_json(text, "resume_overview")
+
+
+# ── Master question orchestrator ──
+
+async def generate_structured_question(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+    question_number: int,
+    total_questions: int,
+    session_state: dict,
+    ladder: dict | None = None,
+) -> dict:
+    """Generate the next question using the progressive knowledge ladder."""
+
+    if question_number < 1 or question_number > total_questions:
+        return get_wrap_question()
+
+    q_type, source = SESSION_FLOW[(question_number - 1) % len(SESSION_FLOW)]
+
+    # Fixed questions.
+    if source == "fixed":
+        if q_type == "intro":
+            return get_intro_question()
+        if q_type == "resume_overview":
+            return await _generate_resume_overview_question(client, provider, api_key, model, blueprint)
+        if q_type == "wrap":
+            return get_wrap_question()
+
+    # Ladder questions (tier_1, tier_2, tier_3).
+    if source == "ladder" and ladder:
+        tier_counters = session_state.get("tierCounters") or {"tier_1": 0, "tier_2": 0, "tier_3": 0}
+        topic_idx = tier_counters.get(q_type, 0)
+        result = await _generate_ladder_question(
+            client, provider, api_key, model,
+            blueprint, ladder, q_type, topic_idx, session_state,
+        )
+        tier_counters[q_type] = topic_idx + 1
+        session_state["tierCounters"] = tier_counters
+        return result
+
+    # Resume-based project question.
+    if source == "resume":
+        return await _generate_project_question(client, provider, api_key, model, blueprint, session_state)
+
+    # Dynamic behavioral question.
+    if source == "dynamic":
+        return await _generate_behavioral_question(client, provider, api_key, model, blueprint, session_state)
+
+    return get_wrap_question()
+
+
+# ─── Blueprint extraction (richer than profile) ──────────
+
+BLUEPRINT_SYSTEM = (
+    "You are an expert interviewer. Analyse resumes from ANY domain — software, teaching, "
+    "healthcare, marketing, finance, law, design, etc. Return ONLY raw JSON."
+)
+
+
+def build_blueprint_prompt(resume_text: str) -> str:
+    return f"""Analyse this resume and extract an interview blueprint.
+
+RESUME:
+\"\"\"
+{resume_text[:5000]}
+\"\"\"
+
+Return JSON only:
+{{
+  "candidate_name": "...",
+  "primary_domain": "e.g. Data Science, Backend Engineering, Marketing, Finance, Education",
+  "experience_years": 0,
+  "seniority_level": "junior|mid|senior|lead|manager",
+  "is_technical": true,
+  "core_skills": ["skill1", "skill2"],
+  "tools_and_technologies": ["tool1"],
+  "domain_core_concepts": [
+    "concept1", "concept2", "concept3", "concept4", "concept5",
+    "concept6", "concept7", "concept8", "concept9", "concept10"
+  ],
+  "notable_projects": [
+    {{"name": "...", "description": "...", "tech_used": "...", "impact": "..."}}
+  ],
+  "career_summary": "2-3 sentence summary of their background",
+  "behavioral_themes": ["led a team", "handled tight deadlines"]
+}}
+
+RULES:
+- domain_core_concepts: 10-12 must-know concepts for their domain, NOT from the resume — from your domain knowledge.
+  e.g. for a React dev: closures, event loop, virtual DOM, hooks lifecycle, memoization, etc.
+  e.g. for a teacher: Bloom's Taxonomy, differentiated instruction, formative assessment, etc.
+- seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
+- is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales
+- Return valid JSON only — no extra text."""
+
+
+async def extract_interview_blueprint(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    resume_text: str,
+) -> dict:
+    """Extract a rich interview blueprint from the resume."""
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=BLUEPRINT_SYSTEM,
+        messages=[{"role": "user", "content": build_blueprint_prompt(resume_text)}],
+        temperature=0.1,
+        max_tokens=1024,
+        label="blueprint",
+    )
+    cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end <= start:
+        raise ProviderResponseError(f"No JSON in blueprint response: {repr(text[:150])}")
+    try:
+        data = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError as error:
+        raise ProviderResponseError(f"Could not parse blueprint JSON: {error.msg}") from error
+
+    return {
+        "candidate_name": str(data.get("candidate_name") or "Candidate").strip(),
+        "primary_domain": str(data.get("primary_domain") or "General Professional").strip(),
+        "experience_years": int(data.get("experience_years") or 0),
+        "seniority_level": str(data.get("seniority_level") or "mid").strip(),
+        "is_technical": bool(data.get("is_technical", True)),
+        "core_skills": [str(s).strip() for s in (data.get("core_skills") or []) if str(s).strip()][:10],
+        "tools_and_technologies": [str(t).strip() for t in (data.get("tools_and_technologies") or []) if str(t).strip()][:10],
+        "domain_core_concepts": [str(c).strip() for c in (data.get("domain_core_concepts") or []) if str(c).strip()][:12],
+        "notable_projects": (data.get("notable_projects") or [])[:5],
+        "career_summary": str(data.get("career_summary") or "").strip(),
+        "behavioral_themes": [str(b).strip() for b in (data.get("behavioral_themes") or []) if str(b).strip()][:6],
+    }
+
+
+# ─── Session report generation ────────────────────────────
+
+SESSION_REPORT_SYSTEM = (
+    "You generate comprehensive mock interview performance reports. "
+    "Return ONLY raw JSON — no markdown, no backticks, no commentary."
+)
+
+
+def build_session_report_prompt(blueprint: dict, answers: list[dict]) -> str:
+    transcript = "\n\n".join(
+        f"Q{i+1} [{a.get('category', 'unknown')}]: {a.get('question', '')}\n"
+        f"Answer: {a.get('answer', '')}\n"
+        f"Score: {a.get('score', 'N/A')}/100"
+        for i, a in enumerate(answers)
+    )
+    scores_summary = "\n".join(
+        f"- Q{i+1}: {a.get('score', 'N/A')}/100 | {a.get('category', '')} | {a.get('feedback', '')}"
+        for i, a in enumerate(answers)
+    )
+    return f"""CANDIDATE: {blueprint.get('candidate_name', 'Candidate')}
+DOMAIN: {blueprint.get('primary_domain', 'General')}
+SENIORITY: {blueprint.get('seniority_level', 'mid')}
+EXPERIENCE: {blueprint.get('experience_years', 0)} years
+
+INTERVIEW TRANSCRIPT:
+{transcript}
+
+INDIVIDUAL SCORES:
+{scores_summary}
+
+Generate a performance report. Return JSON only:
+{{
+  "overall_score": 0-100,
+  "grade": "A+|A|B+|B|C+|C|D|F",
+  "hire_recommendation": "Strong Hire|Hire|Maybe|No Hire",
+  "summary": "3-4 sentence executive summary",
+  "category_scores": {{
+    "domain_knowledge": {{"score": 0-10, "feedback": "..."}},
+    "technical_skills": {{"score": 0-10, "feedback": "..."}},
+    "project_experience": {{"score": 0-10, "feedback": "..."}},
+    "communication": {{"score": 0-10, "feedback": "..."}},
+    "behavioral": {{"score": 0-10, "feedback": "..."}}
+  }},
+  "strengths": ["strength1", "strength2", "strength3"],
+  "improvement_areas": ["area1", "area2", "area3"],
+  "question_breakdown": [
+    {{"question_number": 1, "category": "...", "score": 0-100, "one_line_feedback": "..."}}
+  ],
+  "next_steps": ["step1", "step2", "step3"]
+}}"""
+
+
+async def generate_session_report(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    blueprint: dict,
+    answers: list[dict],
+) -> dict:
+    """Generate a comprehensive end-of-session interview report."""
+    resolved_key = resolve_api_key(provider, api_key)
+    text = await _call_chat_text_with_fallback(
+        client, provider, resolved_key, model,
+        system=SESSION_REPORT_SYSTEM,
+        messages=[{"role": "user", "content": build_session_report_prompt(blueprint, answers)}],
+        temperature=0.2,
+        max_tokens=2048,
+        label="report",
+    )
+    cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end <= start:
+        raise ProviderResponseError(f"No JSON in report: {repr(text[:150])}")
+    try:
+        return json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError as error:
+        raise ProviderResponseError(f"Could not parse report JSON: {error.msg}") from error
+
+
 PROFILE_SYSTEM = (
     "You read a candidate's resume and extract a structured professional profile. "
     "You are domain-agnostic — the candidate may be a software engineer, teacher, nurse, "
@@ -1310,6 +1928,64 @@ EVALUATION INSTRUCTIONS:
 
 Respond with ONLY a raw JSON object — no markdown, no backticks, no explanation outside the JSON:
 {{"score": <integer 0-100>, "verdict": "correct"|"partial"|"incorrect", "strength": "<specific things they demonstrated correctly in {domain} terms — be generous with partial credit>", "missing": "<specific {domain}-relevant points they missed — be precise>", "hint": "<Socratic question pointing toward the gap, empty string if correct>", "ideal": "<concise ideal answer in 2-3 sentences, phrased as a real {role} would say it>"}}"""
+
+
+# ─── Transcript cleanup ───────────────────────────────────
+
+TRANSCRIPT_CLEANUP_SYSTEM = (
+    "You clean up raw speech-to-text transcripts from mock interviews. "
+    "Return ONLY the corrected transcript — no extra commentary, no quotes, no labels."
+)
+
+
+def build_transcript_cleanup_prompt(raw: str) -> str:
+    return f"""The following is a raw speech-to-text transcript from a mock interview.
+
+Fix ONLY:
+- Obvious speech recognition errors (homophones, broken words, e.g. "letten const" → "let and const", "temporal dead son" → "temporal dead zone")
+- Missing or wrong punctuation
+- Run-on fragments from interim captures
+
+Do NOT:
+- Change the meaning or intent
+- Add content the candidate didn't say
+- Rephrase or improve the answer
+- Remove filler words like "um", "uh" (the evaluator expects natural speech)
+
+Raw transcript:
+\"\"\"
+{raw}
+\"\"\"
+
+Return ONLY the corrected transcript, nothing else."""
+
+
+async def clean_transcript(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    raw_transcript: str,
+) -> str:
+    """Clean up a raw speech-to-text transcript using a lightweight LLM call."""
+    if len(raw_transcript.strip()) < 15:
+        return raw_transcript  # too short to be worth cleaning
+
+    resolved_key = resolve_api_key(provider, api_key)
+    try:
+        text = await _call_chat_text_with_fallback(
+            client, provider, resolved_key, model,
+            system=TRANSCRIPT_CLEANUP_SYSTEM,
+            messages=[{"role": "user", "content": build_transcript_cleanup_prompt(raw_transcript)}],
+            temperature=0.1,
+            max_tokens=1024,
+            label="cleanup",
+        )
+        cleaned = text.strip().strip('"').strip("'").strip()
+        return cleaned if cleaned else raw_transcript
+    except Exception as error:
+        _log(f"[cleanup] transcript cleanup failed (non-fatal): {error}", file=sys.stderr)
+        return raw_transcript
 
 
 EXTRACT_SYSTEM = (
