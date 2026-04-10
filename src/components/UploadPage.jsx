@@ -194,6 +194,11 @@ export default function UploadPage({ onGenerateFromFile, onBack }) {
       <p className="upload-note">
         The interviewer reads your resume and asks adaptive, conversational questions tailored to your background.
       </p>
+
+      <p className="upload-branding">
+        An official product of{' '}
+        <a href="https://futurebeyondtech.com" target="_blank" rel="noreferrer">FBT — Future Beyond Tech</a>
+      </p>
     </div>
   );
 }

@@ -1250,6 +1250,23 @@ html, body {
   line-height: 1.6;
 }
 
+.upload-branding {
+  margin-top: 24px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+.upload-branding a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.upload-branding a:hover {
+  text-decoration: underline;
+}
+
 /* ── Interview (conversational) ── */
 .iv-progress {
   display: flex;
