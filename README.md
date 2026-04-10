@@ -1,4 +1,4 @@
-# Sheikh Mock — AI Interview Simulator
+# FBT Mock — AI Interview Simulator
 
 An immersive mock interview app for JavaScript/React roles with real-time AI evaluation. Supports **5 LLM providers**: Ollama (local/free), Groq, Google Gemini, OpenAI, and Anthropic.
 
@@ -60,7 +60,7 @@ Optional backend env vars:
 ## Project Structure
 
 ```
-sheikh-mock/
+fbt-mock/
 ├── backend/
 │   ├── main.py           # FastAPI — routes + health
 │   ├── providers.py       # Ollama / Groq / Gemini / OpenAI / Anthropic adapters

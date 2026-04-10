@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────
-# Sheikh Mock — Start both backend and frontend
+# FBT Mock — Start both backend and frontend
 # Usage:  ./start.sh
 # ─────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${CYAN}  Sheikh Mock — AI Interview Simulator${NC}"
+echo -e "${CYAN}  FBT Mock — AI Interview Simulator${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
