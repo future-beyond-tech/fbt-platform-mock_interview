@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from 'react';
+import { useDispatch } from 'react-redux';
 import { fetchQuestions, fetchProviders, evaluateAnswer, generateQuestions, startInterview, healthCheck, cleanTranscript } from './api';
 import { useSettings } from './hooks/useSettings';
+import { setBlueprint, addQuestion, resetInterview } from './store/interviewSlice';
 import StatusBar from './components/StatusBar';
 import UploadPage from './components/UploadPage';
 import { Alert, Button, LaunchLoader, SessionScreenSkeleton } from './components/ui';
@@ -50,6 +52,7 @@ const initial = {
 export default function App() {
   const [s, setS] = useState(initial);
   const { settings, update: updateSettings } = useSettings();
+  const dispatch = useDispatch();
 
   const loadInitialData = useCallback(async () => {
     setS(prev => ({ ...prev, loading: true, errorMessage: '' }));
@@ -133,6 +136,16 @@ export default function App() {
         settings.apiKey,
         settings.model,
       );
+      // Dispatch to Redux store for report screen.
+      dispatch(resetInterview());
+      dispatch(setBlueprint(data.blueprint));
+      dispatch(addQuestion({
+        question: data.question,
+        category: data.category,
+        section: data.section,
+        questionNumber: data.question_number,
+      }));
+
       setS(prev => ({
         ...prev,
         loading: false,

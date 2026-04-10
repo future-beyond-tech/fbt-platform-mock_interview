@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { useDispatch } from 'react-redux';
 import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
@@ -6,8 +7,8 @@ import ScoreReveal from './ScoreReveal';
 import WaveformVisualizer from './WaveformVisualizer';
 import InterviewProgress from './InterviewProgress';
 import InterviewReport from './InterviewReport';
-import RoboFetch from './RoboFetch';
 import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport } from '../api';
+import { submitAnswer as dispatchAnswer, addQuestion, setReport as dispatchReport } from '../store/interviewSlice';
 
 function appendTranscript(currentText, incomingText) {
   if (!incomingText) return currentText;
@@ -44,6 +45,7 @@ export default function InterviewSession({
   const [error, setError] = useState('');
   const [loadingNext, setLoadingNext] = useState(false);
   const [report, setReport] = useState(null);
+  const dispatch = useDispatch();
   const [loadingReport, setLoadingReport] = useState(false);
   const [history, setHistory] = useState([
     { role: 'assistant', section: initialSection || 'Introduction', category: initialCategory || 'intro', text: initialQuestion },
@@ -129,6 +131,21 @@ export default function InterviewSession({
       lastAnswer.feedback = evalResult.strength;
     }
 
+    // Dispatch to Redux store.
+    dispatch(dispatchAnswer({
+      questionIndex: questionNumber,
+      question: currentQuestion,
+      answer: text,
+      score: evalResult.score,
+      verdict: evalResult.verdict,
+      strength: evalResult.strength,
+      missing: evalResult.missing,
+      hint: evalResult.hint,
+      ideal: evalResult.ideal,
+      category: currentCategory,
+      section: currentSection,
+    }));
+
     setResult(evalResult);
     setPhase('result');
   };
@@ -162,6 +179,14 @@ export default function InterviewSession({
         return;
       }
 
+      // Dispatch new question to Redux.
+      dispatch(addQuestion({
+        question: data.question,
+        category: data.category,
+        section: data.section,
+        questionNumber: data.question_number,
+      }));
+
       setCurrentQuestion(data.question);
       setCurrentSection(data.section);
       setCurrentCategory(data.category || 'domain_concept');
@@ -191,6 +216,7 @@ export default function InterviewSession({
         settings.model,
       );
       setReport(data.report);
+      dispatch(dispatchReport(data.report));
     } catch (e) {
       setError(e.message || 'Failed to generate report.');
     } finally {
@@ -261,14 +287,8 @@ export default function InterviewSession({
     );
   }
 
-  // Robot loader — replaces entire screen while fetching next question.
-  if (loadingNext) {
-    return (
-      <div className="interview-screen slide-up">
-        <RoboFetch questionNumber={questionNumber + 1} total={totalQuestions} />
-      </div>
-    );
-  }
+  // Robot loader is now shown INLINE inside the main screen (see below),
+  // not as a full-page replacement.
 
   return (
     <div className="interview-screen slide-up">
@@ -448,22 +468,34 @@ export default function InterviewSession({
 
           {error && <div className="inline-error">{error}</div>}
 
-          <div className="answer-actions">
-            {result.verdict !== 'correct' && (
-              <button className="action-btn outline" type="button" onClick={() => void handleRetry()}>
-                ↺ Try Again
+          {!loadingNext && (
+            <div className="answer-actions">
+              {result.verdict !== 'correct' && (
+                <button className="action-btn outline" type="button" onClick={() => void handleRetry()}>
+                  ↺ Try Again
+                </button>
+              )}
+              <button
+                className="action-btn primary"
+                type="button"
+                onClick={() => void handleNext()}
+              >
+                {questionNumber >= totalQuestions ? 'Finish & See Report' : 'Next Question'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
-            )}
-            <button
-              className="action-btn primary"
-              type="button"
-              onClick={() => void handleNext()}
-              disabled={loadingNext}
-            >
-              {questionNumber >= totalQuestions ? 'Finish & See Report' : 'Next Question'}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-            </button>
-          </div>
+            </div>
+          )}
+
+          {loadingNext && (
+            <div className="thinking-loader slide-up">
+              <div className="thinking-loader-dots">
+                <span /><span /><span />
+              </div>
+              <p className="thinking-loader-text">
+                Preparing question {questionNumber + 1} of {totalQuestions}...
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
