@@ -25,7 +25,7 @@ def _log(*args, **kwargs):
 # Transient HTTP statuses worth retrying. 503 is the Google AI Studio
 # "high demand" overload code; 529 is Anthropic's overload; 500/502/504 are
 # generic transient gateway errors.
-RETRY_STATUSES: set[int] = {500, 502, 503, 504, 529}
+RETRY_STATUSES: set[int] = {429, 500, 502, 503, 504, 529}
 
 # Provider circuit-breaker: when a provider returns an overload status, mark
 # it "sick" for COOLDOWN_SECONDS. Subsequent calls within that window short-
@@ -341,7 +341,7 @@ async def call_groq(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={
-            "model": model or "llama-3.3-70b-versatile",
+            "model": model or "llama-3.1-8b-instant",
             "temperature": 0.3,
             "max_tokens": 512,
             "messages": [
@@ -439,33 +439,48 @@ async def evaluate_with_provider(
     try:
         return await _retry_with_backoff(_primary, label=f"eval:{provider}", provider=provider)
     except (httpx.HTTPStatusError, httpx.RequestError) as primary_error:
-        if provider == "groq" or provider == "ollama":
+        if provider == "ollama":
             raise
 
-        # Try Groq fallback if a key is available.
-        try:
-            resolve_api_key("groq", "")
-        except ClientInputError:
-            _log(
-                f"[fallback:eval] {provider} exhausted retries and no GROQ_API_KEY is set; "
-                f"surfacing original error",
-                file=sys.stderr,
-            )
+        # Build eval fallback chain.
+        fallbacks: list[tuple[str, str, str]] = []  # (label, provider, model)
+        if provider != "gemini":
+            try:
+                resolve_api_key("gemini", "")
+                fallbacks.append(("gemini-flash", "gemini", "gemini-2.0-flash"))
+            except ClientInputError:
+                pass
+        if provider != "groq":
+            try:
+                resolve_api_key("groq", "")
+                fallbacks.append(("groq", "groq", GROQ_FALLBACK_MODEL))
+            except ClientInputError:
+                pass
+
+        if not fallbacks:
             raise primary_error
 
-        _log(
-            f"[fallback:eval] {provider} exhausted retries; falling back to Groq "
-            f"({GROQ_FALLBACK_MODEL})",
-            file=sys.stderr,
-        )
-
-        async def _fallback() -> dict:
-            return await _evaluate_once(
-                client, "groq", "", GROQ_FALLBACK_MODEL,
-                section, question, answer, profile,
+        for fb_label, fb_provider, fb_model in fallbacks:
+            _log(
+                f"[fallback:eval] {provider} exhausted; trying {fb_label} ({fb_model})",
+                file=sys.stderr,
             )
 
-        return await _retry_with_backoff(_fallback, max_attempts=2, label="eval:groq")
+            async def _make_fb(p=fb_provider, m=fb_model) -> dict:
+                return await _evaluate_once(
+                    client, p, "", m, section, question, answer, profile,
+                )
+
+            try:
+                return await _retry_with_backoff(
+                    _make_fb, max_attempts=2,
+                    label=f"eval:{fb_label}", provider=fb_provider,
+                )
+            except Exception as fb_error:
+                _log(f"[fallback:eval] {fb_label} also failed: {fb_error}", file=sys.stderr)
+                continue
+
+        raise primary_error
 
 
 # ─── Question generation ──────────────────────────────────
@@ -540,7 +555,7 @@ async def _call_llm_for_questions(
         if provider == "groq":
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}"}
-            mdl = model or "llama-3.3-70b-versatile"
+            mdl = model or "llama-3.1-8b-instant"
         elif provider == "openai":
             url = "https://api.openai.com/v1/chat/completions"
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -968,7 +983,7 @@ async def _call_chat_text(
 
 # ─── Chat-text fallback chain ─────────────────────────────
 # Default Groq chat model used when the primary provider exhausts retries.
-GROQ_FALLBACK_MODEL = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"  # higher free-tier limit than 70b
 
 
 async def _call_chat_text_with_fallback(
@@ -998,40 +1013,58 @@ async def _call_chat_text_with_fallback(
     try:
         return await _retry_with_backoff(_primary, label=f"{label}:{provider}", provider=provider)
     except (httpx.HTTPStatusError, httpx.RequestError) as primary_error:
-        if provider == "groq":
-            raise  # already on the fallback target
+        # Build a fallback chain: try alternative providers in order.
+        fallbacks: list[tuple[str, str, str, str]] = []  # (label, provider, key, model)
 
-        # Try the Groq fallback if a key is available.
-        try:
-            groq_key = resolve_api_key("groq", "")
-        except ClientInputError:
+        # Fallback 1: Gemini flash (if primary wasn't already Gemini).
+        if provider != "gemini":
+            try:
+                gemini_key = resolve_api_key("gemini", "")
+                fallbacks.append(("gemini-flash", "gemini", gemini_key, "gemini-2.0-flash"))
+            except ClientInputError:
+                pass
+
+        # Fallback 2: Groq (if primary wasn't already Groq).
+        if provider != "groq":
+            try:
+                groq_key = resolve_api_key("groq", "")
+                fallbacks.append(("groq", "groq", groq_key, GROQ_FALLBACK_MODEL))
+            except ClientInputError:
+                pass
+
+        if not fallbacks:
             _log(
-                f"[fallback:{label}] {provider} exhausted retries and no GROQ_API_KEY is set; "
-                f"surfacing original error",
+                f"[fallback:{label}] {provider} exhausted retries and no fallback keys available",
                 file=sys.stderr,
             )
             raise primary_error
 
-        _log(
-            f"[fallback:{label}] {provider} exhausted retries; falling back to Groq "
-            f"({GROQ_FALLBACK_MODEL})",
-            file=sys.stderr,
-        )
-
-        async def _fallback() -> str:
-            return await _call_chat_text(
-                client, "groq", groq_key, GROQ_FALLBACK_MODEL, system, messages,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-
-        try:
-            return await _retry_with_backoff(_fallback, max_attempts=2, label=f"{label}:groq")
-        except Exception as fallback_error:
+        for fb_label, fb_provider, fb_key, fb_model in fallbacks:
             _log(
-                f"[fallback:{label}] groq fallback also failed: {fallback_error}",
+                f"[fallback:{label}] {provider} exhausted; trying {fb_label} ({fb_model})",
                 file=sys.stderr,
             )
-            raise
+
+            async def _make_fallback(p=fb_provider, k=fb_key, m=fb_model) -> str:
+                return await _call_chat_text(
+                    client, p, k, m, system, messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+
+            try:
+                return await _retry_with_backoff(
+                    _make_fallback, max_attempts=2,
+                    label=f"{label}:{fb_label}", provider=fb_provider,
+                )
+            except Exception as fb_error:
+                _log(
+                    f"[fallback:{label}] {fb_label} also failed: {fb_error}",
+                    file=sys.stderr,
+                )
+                continue
+
+        # All fallbacks exhausted.
+        raise primary_error
 
 
 async def interview_next_question(
@@ -1302,31 +1335,40 @@ async def _generate_ladder_question(
         topic = topics[topic_index % len(topics)]
 
     asked_qs = session_state.get("questionsAsked") or []
-    prompt = f"""CANDIDATE PROFILE:
-- Domain: {blueprint.get('primary_domain', 'General')}
-- Seniority: {blueprint.get('seniority_level', 'mid')}
-- Experience: {blueprint.get('experience_years', 0)} years
+    primary_lang = blueprint.get("primary_language_or_tool") or ""
+    stack = ", ".join(blueprint.get("frameworks_and_stack") or []) or "N/A"
 
-CURRENT TIER: {tier.get('label', tier_key)}
-TIER LEVEL: {tier.get('level', 'conceptual')}
-TIER DESCRIPTION: {tier.get('description', '')}
+    prompt = f"""You are a senior technical interviewer.
 
-TOPIC TO ASK ABOUT: {topic['topic']}
-TOPIC DEPTH: {topic.get('depth', 'appropriate to tier')}
-QUESTION ANGLE HINT: {topic.get('sample_question_angle', '')}
+CANDIDATE: {blueprint.get('seniority_level', 'mid')} {blueprint.get('primary_domain', 'developer')} with {blueprint.get('experience_years', 0)} years experience.
+PRIMARY LANGUAGE/TOOL: {primary_lang or 'N/A'}
+STACK: {stack}
 
-QUESTIONS ALREADY ASKED (never repeat or ask anything similar):
+TOPIC TO ASK ABOUT: "{topic['topic']}"
+TIER: {tier.get('label', tier_key)}
+
+Generate a SPECIFIC interview question about "{topic['topic']}".
+
+TIER RULES:
+- Tier 1 (Foundations): Ask "what", "explain", "difference between"
+  Example for "var vs let vs const":
+  → "What is the difference between var, let, and const in JavaScript? Explain scoping, hoisting, and when you'd use each."
+
+- Tier 2 (Advanced): Ask "how does it work internally", "what happens when", "tradeoffs"
+  Example for "Event Loop":
+  → "Explain how JavaScript's event loop works. What is the difference between the microtask queue and macrotask queue?"
+
+- Tier 3 (Practical): Give a REAL scenario to solve
+  Example for "Memory Leak Debugging":
+  → "Your React app's memory usage grows continuously after navigating between pages. Walk me through how you'd identify and fix the leak."
+
+The question MUST mention "{topic['topic']}" by name. Do NOT ask a vague question.
+
+QUESTIONS ALREADY ASKED (never repeat):
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
 
-Generate exactly 1 question for this topic at the specified depth.
-Rules:
-- For Tier 1: test understanding — "explain", "what is", "how does X work"
-- For Tier 2: test application — "how would you", "what are the tradeoffs", "when would you"
-- For Tier 3: test expertise — real scenarios, debugging, design decisions, optimization
-- NEVER ask resume-based questions here — this tests pure knowledge
-
 Return JSON only:
-{{"question": "...", "topic": "{topic['topic']}", "tier": "{tier.get('label', tier_key)}", "category": "{tier_key}", "difficulty": "easy|medium|hard", "what_to_evaluate": "what a strong answer must include"}}"""
+{{"question": "the full question text — must reference {topic['topic']} specifically", "topic": "{topic['topic']}", "tier": "{tier.get('label', tier_key)}", "category": "{tier_key}", "difficulty": "easy|medium|hard", "type": "conceptual|applied|scenario", "what_to_evaluate": "key points a strong answer must cover"}}"""
 
     resolved_key = resolve_api_key(provider, api_key)
     text = await _call_chat_text_with_fallback(
@@ -1511,16 +1553,25 @@ async def generate_structured_question(
     return get_wrap_question()
 
 
-# ─── Blueprint extraction (richer than profile) ──────────
+# ─── Blueprint + Ladder extraction (single call) ─────────
 
 BLUEPRINT_SYSTEM = (
-    "You are an expert interviewer. Analyse resumes from ANY domain — software, teaching, "
-    "healthcare, marketing, finance, law, design, etc. Return ONLY raw JSON."
+    "You are an expert interviewer and curriculum designer. "
+    "You analyse resumes from ANY domain — software, teaching, healthcare, marketing, "
+    "finance, law, design, etc. Return ONLY raw JSON — no markdown, no backticks."
 )
+
+# Domains that are too vague — triggers re-extraction with stricter prompt.
+_VAGUE_DOMAINS = {
+    "general", "general professional", "professional", "software",
+    "software engineer", "developer", "specialist", "consultant", "expert",
+    "it", "technology", "engineering",
+}
 
 
 def build_blueprint_prompt(resume_text: str) -> str:
-    return f"""Analyse this resume and extract an interview blueprint.
+    return f"""Analyse this resume carefully. Extract a precise interview blueprint
+with a progressive knowledge ladder.
 
 RESUME:
 \"\"\"
@@ -1530,30 +1581,68 @@ RESUME:
 Return JSON only:
 {{
   "candidate_name": "...",
-  "primary_domain": "e.g. Data Science, Backend Engineering, Marketing, Finance, Education",
+  "primary_domain": "SPECIFIC domain — e.g. Frontend Development, Machine Learning, Physics Education, Corporate Finance, DevOps Engineering. NEVER use vague labels like 'Software Engineer' or 'General Professional'.",
+  "primary_language_or_tool": "e.g. JavaScript, Python, R, Excel, Blender",
+  "frameworks_and_stack": ["React", "Node.js", "PostgreSQL"],
   "experience_years": 0,
   "seniority_level": "junior|mid|senior|lead|manager",
   "is_technical": true,
   "core_skills": ["skill1", "skill2"],
   "tools_and_technologies": ["tool1"],
-  "domain_core_concepts": [
-    "concept1", "concept2", "concept3", "concept4", "concept5",
-    "concept6", "concept7", "concept8", "concept9", "concept10"
-  ],
+
+  "knowledge_ladder": {{
+    "tier_1": {{
+      "label": "Foundations",
+      "topics": [
+        "NAMED concept 1",
+        "NAMED concept 2",
+        "NAMED concept 3",
+        "NAMED concept 4",
+        "NAMED concept 5"
+      ]
+    }},
+    "tier_2": {{
+      "label": "Advanced Concepts",
+      "topics": [
+        "NAMED concept 1",
+        "NAMED concept 2",
+        "NAMED concept 3",
+        "NAMED concept 4",
+        "NAMED concept 5"
+      ]
+    }},
+    "tier_3": {{
+      "label": "Real-World Problem Solving",
+      "topics": [
+        "NAMED concept/scenario 1",
+        "NAMED concept/scenario 2",
+        "NAMED concept/scenario 3",
+        "NAMED concept/scenario 4"
+      ]
+    }}
+  }},
+
   "notable_projects": [
     {{"name": "...", "description": "...", "tech_used": "...", "impact": "..."}}
   ],
-  "career_summary": "2-3 sentence summary of their background",
-  "behavioral_themes": ["led a team", "handled tight deadlines"]
+  "career_summary": "2-3 sentence summary",
+  "behavioral_themes": ["led a team", "handled deadlines"]
 }}
 
-RULES:
-- domain_core_concepts: 10-12 must-know concepts for their domain, NOT from the resume — from your domain knowledge.
-  e.g. for a React dev: closures, event loop, virtual DOM, hooks lifecycle, memoization, etc.
-  e.g. for a teacher: Bloom's Taxonomy, differentiated instruction, formative assessment, etc.
-- seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
-- is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales
-- Return valid JSON only — no extra text."""
+STRICT RULES:
+1. primary_domain must be SPECIFIC — "Frontend Development" not "Software". Look at the actual tech stack and job titles.
+2. Every topic in knowledge_ladder MUST be a NAMED concept that people Google.
+   - JS dev tier 1:  "var vs let vs const", "Temporal Dead Zone", "hoisting", "closures", "event delegation"
+   - React dev tier 2: "React reconciliation", "useCallback vs useMemo", "React Fiber", "code splitting"
+   - Physics teacher tier 1: "Newton's Third Law", "conservation of momentum", "Ohm's Law"
+   - Finance tier 1: "NPV vs IRR", "time value of money", "WACC calculation"
+3. NEVER use vague topics like "core concept", "underappreciated concept", "general best practice".
+4. Tier 1 = things a junior must know (definitions, basics)
+5. Tier 2 = things a mid/senior must know (internals, tradeoffs, design decisions)
+6. Tier 3 = real-world scenarios (debugging, optimization, architecture, at scale)
+7. Topics must come from domain knowledge, NOT from the resume text.
+8. seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
+9. is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales"""
 
 
 async def extract_interview_blueprint(
@@ -1563,14 +1652,14 @@ async def extract_interview_blueprint(
     model: str,
     resume_text: str,
 ) -> dict:
-    """Extract a rich interview blueprint from the resume."""
+    """Extract a rich interview blueprint with embedded knowledge ladder."""
     resolved_key = resolve_api_key(provider, api_key)
     text = await _call_chat_text_with_fallback(
         client, provider, resolved_key, model,
         system=BLUEPRINT_SYSTEM,
         messages=[{"role": "user", "content": build_blueprint_prompt(resume_text)}],
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=2048,
         label="blueprint",
     )
     cleaned = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
@@ -1584,15 +1673,60 @@ async def extract_interview_blueprint(
     except json.JSONDecodeError as error:
         raise ProviderResponseError(f"Could not parse blueprint JSON: {error.msg}") from error
 
+    domain = str(data.get("primary_domain") or "").strip()
+    if domain.lower() in _VAGUE_DOMAINS or not domain:
+        # Try to derive from stack / skills / job titles.
+        stack = data.get("frameworks_and_stack") or data.get("tools_and_technologies") or []
+        lang = data.get("primary_language_or_tool") or ""
+        if stack:
+            domain = f"{lang} {stack[0]} Development".strip() if lang else f"{stack[0]} Development"
+        elif lang:
+            domain = f"{lang} Development"
+        else:
+            domain = "Software Development"
+        _log(f"[blueprint] vague domain detected; overriding to '{domain}'")
+
+    # Parse embedded ladder.
+    raw_ladder = data.get("knowledge_ladder") or {}
+    ladder = {}
+    for tier_key in ("tier_1", "tier_2", "tier_3"):
+        tier = raw_ladder.get(tier_key) or {}
+        topics_raw = tier.get("topics") or []
+        topics = []
+        for t in topics_raw[:5]:
+            if isinstance(t, str) and t.strip():
+                topics.append({
+                    "topic": t.strip(),
+                    "depth": "",
+                    "sample_question_angle": "",
+                })
+            elif isinstance(t, dict) and t.get("topic"):
+                topics.append({
+                    "topic": str(t["topic"]).strip(),
+                    "depth": str(t.get("depth", "")).strip(),
+                    "sample_question_angle": str(t.get("sample_question_angle", "")).strip(),
+                })
+        label_defaults = {"tier_1": "Foundations", "tier_2": "Advanced Concepts", "tier_3": "Real-World Problem Solving"}
+        level_defaults = {"tier_1": "foundational", "tier_2": "advanced", "tier_3": "expert_practical"}
+        ladder[tier_key] = {
+            "level": level_defaults.get(tier_key, tier_key),
+            "label": str(tier.get("label") or label_defaults.get(tier_key, tier_key)).strip(),
+            "description": str(tier.get("description", "")).strip(),
+            "topics": topics,
+        }
+
     return {
         "candidate_name": str(data.get("candidate_name") or "Candidate").strip(),
-        "primary_domain": str(data.get("primary_domain") or "General Professional").strip(),
+        "primary_domain": domain,
+        "primary_language_or_tool": str(data.get("primary_language_or_tool") or "").strip(),
+        "frameworks_and_stack": [str(s).strip() for s in (data.get("frameworks_and_stack") or []) if str(s).strip()][:8],
         "experience_years": int(data.get("experience_years") or 0),
         "seniority_level": str(data.get("seniority_level") or "mid").strip(),
         "is_technical": bool(data.get("is_technical", True)),
         "core_skills": [str(s).strip() for s in (data.get("core_skills") or []) if str(s).strip()][:10],
         "tools_and_technologies": [str(t).strip() for t in (data.get("tools_and_technologies") or []) if str(t).strip()][:10],
         "domain_core_concepts": [str(c).strip() for c in (data.get("domain_core_concepts") or []) if str(c).strip()][:12],
+        "knowledge_ladder": ladder,
         "notable_projects": (data.get("notable_projects") or [])[:5],
         "career_summary": str(data.get("career_summary") or "").strip(),
         "behavioral_themes": [str(b).strip() for b in (data.get("behavioral_themes") or []) if str(b).strip()][:6],

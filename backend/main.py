@@ -46,7 +46,6 @@ from providers import (
     extract_interview_blueprint,
     extract_insights_from_answer,
     extract_profile_from_resume,
-    generate_knowledge_ladder,
     generate_question_from_file,
     generate_questions_with_provider,
     generate_session_report,
@@ -250,8 +249,8 @@ async def get_providers():
             name="Groq",
             needs_key=True,
             server_key_available=_has_server_key("groq"),
-            default_model="llama-3.3-70b-versatile",
-            models=["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen-qwq-32b", "gemma2-9b-it"],
+            default_model="llama-3.1-8b-instant",
+            models=["llama-3.1-8b-instant", "qwen-qwq-32b", "gemma2-9b-it", "llama-3.3-70b-versatile"],
         ),
         ProviderInfo(
             id="openai",
@@ -542,26 +541,18 @@ async def interview_start(
             "behavioral_themes": [],
         }
 
-    # Generate the knowledge ladder (3-tier progressive topics).
-    try:
-        ladder = await asyncio.wait_for(
-            generate_knowledge_ladder(
-                client=http_client,
-                provider=provider,
-                api_key=api_key,
-                model=chosen_model,
-                resume_text=resume_text,
-                blueprint=blueprint,
-            ),
-            timeout=30.0,
-        )
-    except Exception as error:
-        _log(f"[interview] ladder generation failed: {type(error).__name__}: {error}; using empty ladder")
-        ladder = {
-            "tier_1": {"level": "foundational", "label": "Foundations", "description": "", "topics": []},
-            "tier_2": {"level": "advanced", "label": "Advanced", "description": "", "topics": []},
-            "tier_3": {"level": "expert_practical", "label": "Expert", "description": "", "topics": []},
-        }
+    # Knowledge ladder is now embedded in the blueprint (single LLM call).
+    ladder = blueprint.get("knowledge_ladder") or {
+        "tier_1": {"level": "foundational", "label": "Foundations", "description": "", "topics": []},
+        "tier_2": {"level": "advanced", "label": "Advanced", "description": "", "topics": []},
+        "tier_3": {"level": "expert_practical", "label": "Expert", "description": "", "topics": []},
+    }
+
+    _log(f"[interview] blueprint: domain={blueprint['primary_domain']}, "
+         f"seniority={blueprint['seniority_level']}, years={blueprint['experience_years']}, "
+         f"t1_topics={len(ladder.get('tier_1', {}).get('topics', []))}, "
+         f"t2_topics={len(ladder.get('tier_2', {}).get('topics', []))}, "
+         f"t3_topics={len(ladder.get('tier_3', {}).get('topics', []))}")
 
     # Build a profile dict from the blueprint for backwards-compat with eval prompts.
     profile = {
