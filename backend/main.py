@@ -1,5 +1,5 @@
 """
-Sheikh Mock Interviewer — Multi-provider FastAPI backend.
+FBT Mock Interviewer — Multi-provider FastAPI backend.
 Supports: Ollama (local), Google Gemini, Groq, OpenAI, Anthropic.
 
 Run:  uvicorn main:app --reload --port 8000
@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(25.0, connect=5.0, read=25.0, write=25.0),
     )
-    _log("[OK] Sheikh Mock backend ready - multi-provider mode")
+    _log("[OK] FBT Mock backend ready - multi-provider mode")
 
     try:
         models = await _fetch_ollama_models()
@@ -150,7 +150,7 @@ async def lifespan(app: FastAPI):
     await http_client.aclose()
 
 
-app = FastAPI(title="Sheikh Mock API", lifespan=lifespan)
+app = FastAPI(title="FBT Mock API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),

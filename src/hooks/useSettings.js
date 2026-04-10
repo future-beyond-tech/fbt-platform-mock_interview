@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-const STORAGE_KEY = 'sheikh-mock-settings';
+const STORAGE_KEY = 'fbt-mock-settings';
 const PROVIDER_IDS = ['ollama', 'gemini', 'groq', 'openai', 'anthropic'];
 const DEFAULT_PROFILE = { model: '', apiKey: '' };
 

@@ -99,7 +99,7 @@ export default function UploadPage({ onGenerateFromFile, onBack }) {
           </Button>
         )}
         <div className="upload-title-area">
-          <h2 className="upload-title">Sheikh Mock Interview</h2>
+          <h2 className="upload-title">FBT Mock Interview</h2>
           <p className="upload-sub">Upload your resume (PDF) and start a real, conversational mock interview with adaptive AI</p>
         </div>
       </div>

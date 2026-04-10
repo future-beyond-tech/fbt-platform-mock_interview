@@ -1,4 +1,4 @@
-"""Question bank for Sheikh Mock Interviewer."""
+"""Question bank for FBT Mock Interviewer."""
 
 QUESTIONS = [
     {"id": "jb01", "q": "What is the difference between var, let, and const? Explain hoisting and the temporal dead zone (TDZ).", "s": "JS Core", "day": 1},

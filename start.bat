@@ -1,12 +1,12 @@
 @echo off
 REM ─────────────────────────────────────────────────
-REM Sheikh Mock — Start both backend and frontend
+REM FBT Mock — Start both backend and frontend
 REM Usage:  start.bat
 REM ─────────────────────────────────────────────────
 
-title Sheikh Mock — AI Interview Simulator
+title FBT Mock — AI Interview Simulator
 echo.
-echo   Sheikh Mock — AI Interview Simulator
+echo   FBT Mock — AI Interview Simulator
 echo   ─────────────────────────────────────
 echo.
 
@@ -39,13 +39,13 @@ echo.
 REM ── Start backend in new window ──
 echo Starting backend on port 8000...
 cd /d "%~dp0backend"
-start "Sheikh Mock Backend" cmd /c "python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+start "FBT Mock Backend" cmd /c "python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 timeout /t 2 /nobreak >nul
 
 REM ── Start frontend in new window ──
 echo Starting frontend on port 5173...
 cd /d "%~dp0"
-start "Sheikh Mock Frontend" cmd /c "npx vite --port 5173"
+start "FBT Mock Frontend" cmd /c "npx vite --port 5173"
 timeout /t 2 /nobreak >nul
 
 echo.

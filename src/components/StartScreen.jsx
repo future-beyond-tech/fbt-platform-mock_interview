@@ -25,7 +25,7 @@ export default function StartScreen({ sessions, onStart, onGenerateAI, onUpload,
     <div className="start-screen slide-up">
       <div className="start-hero">
         <Avatar state="idle" size={90} />
-        <h1 className="hero-title">Sheikh Mock</h1>
+        <h1 className="hero-title">FBT Mock</h1>
         <p className="hero-sub">AI-Powered Interview Simulation</p>
         <p className="hero-desc">
           Practice JavaScript & React interview questions with real-time AI evaluation.
