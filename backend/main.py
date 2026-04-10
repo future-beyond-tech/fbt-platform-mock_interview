@@ -608,8 +608,11 @@ async def interview_start(
         "blueprint": {
             "candidate_name": blueprint.get("candidate_name", "Candidate"),
             "primary_domain": blueprint["primary_domain"],
+            "subject_specialization": blueprint.get("subject_specialization", ""),
+            "role_type": blueprint.get("role_type", ""),
             "seniority_level": blueprint["seniority_level"],
             "experience_years": blueprint["experience_years"],
+            "detection_reasoning": blueprint.get("detection_reasoning", ""),
         },
     }
 

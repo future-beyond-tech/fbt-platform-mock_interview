@@ -1341,37 +1341,50 @@ async def _generate_ladder_question(
     asked_qs = session_state.get("questionsAsked") or []
     primary_lang = blueprint.get("primary_language_or_tool") or ""
     stack = ", ".join(blueprint.get("frameworks_and_stack") or []) or "N/A"
+    subject = blueprint.get("subject_specialization") or blueprint.get("primary_domain") or "their field"
+    role_type = blueprint.get("role_type") or "professional"
+    tier_focus = tier.get("focus") or tier.get("description") or ""
 
-    prompt = f"""You are a senior technical interviewer.
+    prompt = f"""You are a senior interviewer testing a {role_type}.
 
-CANDIDATE: {blueprint.get('seniority_level', 'mid')} {blueprint.get('primary_domain', 'developer')} with {blueprint.get('experience_years', 0)} years experience.
-PRIMARY LANGUAGE/TOOL: {primary_lang or 'N/A'}
-STACK: {stack}
+CANDIDATE:
+- Domain: {blueprint.get('primary_domain', 'General')}
+- Subject Specialization: {subject}
+- Seniority: {blueprint.get('seniority_level', 'mid')} ({blueprint.get('experience_years', 0)} yrs)
+- Stack: {stack}
 
-TOPIC TO ASK ABOUT: "{topic['topic']}"
+TOPIC TO TEST: "{topic['topic']}"
 TIER: {tier.get('label', tier_key)}
+{f'TIER FOCUS: {tier_focus}' if tier_focus else ''}
 
-Generate a SPECIFIC interview question about "{topic['topic']}".
+Generate a SPECIFIC question about "{topic['topic']}" in {subject}.
 
-CRITICAL LENGTH RULE: The question MUST be 1-3 sentences, under 50 words. Ask ONE thing. No essays, no multi-part assignments.
+CRITICAL: Keep the question SHORT — 1-3 sentences, under 50 words. Ask ONE focused thing like a real interviewer.
 
 TIER RULES:
-- Tier 1 (Foundations): Ask "what", "explain", "difference between"
-  → "What is the difference between var, let, and const in JavaScript?"
+- Tier 1 (Fundamentals): "what is", "explain", "difference between" — test SUBJECT knowledge only
+  Physics: "Explain Newton's Third Law with two real-world examples."
+  React: "What is the difference between var, let, and const?"
 
-- Tier 2 (Advanced): Ask "how does it work internally", "what happens when", "tradeoffs"
-  → "How does JavaScript's event loop prioritize microtasks over macrotasks?"
+- Tier 2 (Advanced): "how does it work internally", "tradeoffs", "when would you"
+  Physics: "How does the double-slit experiment demonstrate wave-particle duality?"
+  React: "How does React's reconciliation algorithm decide what to re-render?"
 
-- Tier 3 (Practical): Give a short, concrete scenario
-  → "Your React app leaks memory when navigating between pages. How would you find and fix it?"
+- Tier 3 (Practical): Give a concrete, hands-on scenario
+  Physics: "Design an experiment to demonstrate conservation of momentum."
+  React: "Your app leaks memory when navigating pages. How would you diagnose it?"
 
-The question MUST mention "{topic['topic']}" by name. Do NOT ask a vague question. Do NOT write a paragraph — keep it short like a real interviewer would ask verbally.
+IMPORTANT:
+- NEVER ask generic "Tell me about an underappreciated concept" questions
+- NEVER ask teaching/soft-skill questions in Tier 1 or 2
+- ALWAYS reference "{topic['topic']}" by name in the question
+- Must be answerable by someone expert in {subject}
 
 QUESTIONS ALREADY ASKED (never repeat):
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
 
 Return JSON only:
-{{"question": "the full question text — must reference {topic['topic']} specifically", "topic": "{topic['topic']}", "tier": "{tier.get('label', tier_key)}", "category": "{tier_key}", "difficulty": "easy|medium|hard", "type": "conceptual|applied|scenario", "what_to_evaluate": "key points a strong answer must cover"}}"""
+{{"question": "short question referencing {topic['topic']}", "topic": "{topic['topic']}", "tier": "{tier.get('label', tier_key)}", "category": "{tier_key}", "difficulty": "easy|medium|hard", "type": "conceptual|applied|scenario", "what_to_evaluate": "key points a strong answer must cover"}}"""
 
     resolved_key = resolve_api_key(provider, api_key)
     text = await _call_chat_text_with_fallback(
@@ -1443,15 +1456,25 @@ async def _generate_behavioral_question(
     blueprint: dict,
     session_state: dict,
 ) -> dict:
-    """Generate a behavioral/STAR question tailored to seniority."""
+    """Generate a behavioral/STAR question tailored to seniority. For teachers, uses pedagogy_topics."""
     asked_qs = session_state.get("questionsAsked") or []
     themes = blueprint.get("behavioral_themes") or []
+    pedagogy = blueprint.get("pedagogy_topics") or []
+    role_type = blueprint.get("role_type") or "professional"
+
+    # For educators, weave in pedagogy topics.
+    pedagogy_hint = ""
+    if pedagogy and role_type in ("teacher", "instructor", "professor"):
+        pedagogy_hint = f"\nPEDAGOGY TOPICS TO WEAVE IN: {', '.join(pedagogy)}\nTry to ask about one of these pedagogy skills in a behavioral context.\n"
 
     prompt = f"""CANDIDATE: {blueprint.get('candidate_name', 'Candidate')}
 DOMAIN: {blueprint.get('primary_domain', 'General')}
+SUBJECT: {blueprint.get('subject_specialization') or blueprint.get('primary_domain', 'General')}
+ROLE TYPE: {role_type}
 SENIORITY: {blueprint.get('seniority_level', 'mid')}
 EXPERIENCE: {blueprint.get('experience_years', 0)} years
 BEHAVIORAL THEMES FROM RESUME: {', '.join(themes) or 'None detected'}
+{pedagogy_hint}
 
 QUESTIONS ALREADY ASKED:
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
@@ -1561,22 +1584,30 @@ async def generate_structured_question(
 # ─── Blueprint + Ladder extraction (single call) ─────────
 
 BLUEPRINT_SYSTEM = (
-    "You are an expert interviewer and curriculum designer. "
+    "You are an expert technical recruiter, interviewer, and curriculum designer. "
     "You analyse resumes from ANY domain — software, teaching, healthcare, marketing, "
     "finance, law, design, etc. Return ONLY raw JSON — no markdown, no backticks."
 )
 
-# Domains that are too vague — triggers re-extraction with stricter prompt.
+# Domains / role titles that are too vague.
 _VAGUE_DOMAINS = {
     "general", "general professional", "professional", "software",
-    "software engineer", "developer", "specialist", "consultant", "expert",
-    "it", "technology", "engineering",
+    "software engineer", "software developer", "developer", "programmer",
+    "specialist", "consultant", "expert", "it", "technology", "engineering",
+    "education", "teaching", "educator", "trainer", "instructor",
+    "healthcare", "legal", "finance", "science", "business", "management",
+}
+
+_VAGUE_TOPIC_KEYWORDS = {
+    "concept", "skill", "knowledge", "understanding", "management",
+    "planning", "communication", "general", "best practice", "underappreciated",
 }
 
 
 def build_blueprint_prompt(resume_text: str) -> str:
-    return f"""Analyse this resume carefully. Extract a precise interview blueprint
-with a progressive knowledge ladder.
+    return f"""Analyse this resume carefully using MULTIPLE signals (job titles, skills,
+projects, tools, education). Extract a precise interview blueprint with role detection
+and a progressive knowledge ladder.
 
 RESUME:
 \"\"\"
@@ -1586,8 +1617,14 @@ RESUME:
 Return JSON only:
 {{
   "candidate_name": "...",
-  "primary_domain": "SPECIFIC domain — e.g. Frontend Development, Machine Learning, Physics Education, Corporate Finance, DevOps Engineering. NEVER use vague labels like 'Software Engineer' or 'General Professional'.",
-  "primary_language_or_tool": "e.g. JavaScript, Python, R, Excel, Blender",
+
+  "primary_domain": "VERY SPECIFIC — e.g. React Frontend Development, Physics Education, Corporate Finance, iOS Mobile Development, Machine Learning Engineering. NEVER 'Software Engineer', 'Education', 'Healthcare', 'Developer'.",
+
+  "subject_specialization": "Core subject — e.g. Physics, React.js, Tax Law, Oncology, JavaScript. For teachers this is their SUBJECT not 'teaching'.",
+
+  "role_type": "frontend|backend|fullstack|devops|data_scientist|ml_engineer|data_analyst|mobile_ios|mobile_android|designer|teacher|doctor|finance_analyst|lawyer|hr_manager|marketing|sales|...",
+
+  "primary_language_or_tool": "e.g. JavaScript, Python, Swift, Excel",
   "frameworks_and_stack": ["React", "Node.js", "PostgreSQL"],
   "experience_years": 0,
   "seniority_level": "junior|mid|senior|lead|manager",
@@ -1597,57 +1634,170 @@ Return JSON only:
 
   "knowledge_ladder": {{
     "tier_1": {{
-      "label": "Foundations",
+      "label": "Core Fundamentals",
+      "focus": "Test SUBJECT knowledge — what every beginner must know",
       "topics": [
-        "NAMED concept 1",
-        "NAMED concept 2",
-        "NAMED concept 3",
-        "NAMED concept 4",
-        "NAMED concept 5"
+        "EXACT NAMED concept 1",
+        "EXACT NAMED concept 2",
+        "EXACT NAMED concept 3",
+        "EXACT NAMED concept 4",
+        "EXACT NAMED concept 5"
       ]
     }},
     "tier_2": {{
-      "label": "Advanced Concepts",
+      "label": "Advanced Knowledge",
+      "focus": "Deeper subject expertise — what separates good from great",
       "topics": [
-        "NAMED concept 1",
-        "NAMED concept 2",
-        "NAMED concept 3",
-        "NAMED concept 4",
-        "NAMED concept 5"
+        "EXACT NAMED concept 1",
+        "EXACT NAMED concept 2",
+        "EXACT NAMED concept 3",
+        "EXACT NAMED concept 4",
+        "EXACT NAMED concept 5"
       ]
     }},
     "tier_3": {{
-      "label": "Real-World Problem Solving",
+      "label": "Applied & Practical",
+      "focus": "Real-world application of subject knowledge",
       "topics": [
-        "NAMED concept/scenario 1",
-        "NAMED concept/scenario 2",
-        "NAMED concept/scenario 3",
-        "NAMED concept/scenario 4"
+        "EXACT scenario topic 1",
+        "EXACT scenario topic 2",
+        "EXACT scenario topic 3",
+        "EXACT scenario topic 4"
       ]
     }}
   }},
+
+  "pedagogy_topics": [
+    "ONLY for teachers/trainers — separated from subject knowledge",
+    "e.g. Handling student misconceptions, Differentiated instruction",
+    "Leave empty [] for non-educators"
+  ],
 
   "notable_projects": [
     {{"name": "...", "description": "...", "tech_used": "...", "impact": "..."}}
   ],
   "career_summary": "2-3 sentence summary",
-  "behavioral_themes": ["led a team", "handled deadlines"]
+  "behavioral_themes": ["led a team", "handled deadlines"],
+
+  "detection_reasoning": "2-3 sentences explaining which signals (job titles, projects, tools, skills, education) led to the domain and role_type conclusion"
 }}
 
-STRICT RULES:
-1. primary_domain must be SPECIFIC — "Frontend Development" not "Software". Look at the actual tech stack and job titles.
-2. Every topic in knowledge_ladder MUST be a NAMED concept that people Google.
-   - JS dev tier 1:  "var vs let vs const", "Temporal Dead Zone", "hoisting", "closures", "event delegation"
-   - React dev tier 2: "React reconciliation", "useCallback vs useMemo", "React Fiber", "code splitting"
-   - Physics teacher tier 1: "Newton's Third Law", "conservation of momentum", "Ohm's Law"
-   - Finance tier 1: "NPV vs IRR", "time value of money", "WACC calculation"
-3. NEVER use vague topics like "core concept", "underappreciated concept", "general best practice".
-4. Tier 1 = things a junior must know (definitions, basics)
-5. Tier 2 = things a mid/senior must know (internals, tradeoffs, design decisions)
-6. Tier 3 = real-world scenarios (debugging, optimization, architecture, at scale)
-7. Topics must come from domain knowledge, NOT from the resume text.
-8. seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
-9. is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales"""
+═══ ROLE DETECTION RULES ═══
+
+Use ALL 5 signals — do NOT rely on job title alone:
+  1. JOB TITLES across career — the PRIMARY pattern, not just the latest
+  2. SKILLS — what's listed first / most frequently = primary
+  3. PROJECTS — what they actually BUILT (strongest signal)
+  4. TOOLS — heavy React/Vue/Angular = Frontend; Django/Spring/SQL = Backend; Docker/K8s = DevOps
+  5. EDUCATION & CERTS — CS+React projects = Frontend; CPA = Finance; Education degree+subject = Teacher
+
+DISAMBIGUATION:
+  - If 70%+ work is UI/frontend → Frontend Developer (not Full Stack)
+  - If 70%+ work is APIs/DB/server → Backend Developer (not Full Stack)
+  - If genuinely mixed 40-60% → Full Stack Developer
+  - "Rockstar Dev" / "Ninja Engineer" → normalise to actual role
+  - "Software Engineer" title but all React projects → React Frontend Developer
+
+═══ SUBJECT SPECIALIZATION (CRITICAL) ═══
+
+For TEACHERS/EDUCATORS:
+  - primary_domain MUST include the subject: "Physics Education" NOT "Education"
+  - subject_specialization = the actual subject: "Physics" NOT "Teaching"
+  - knowledge_ladder tiers 1-3 must test SUBJECT knowledge, NOT pedagogy
+  - Pedagogy topics go in "pedagogy_topics" array ONLY
+
+  Physics Teacher → tier 1: "Newton's Third Law", "Conservation of Momentum"
+                    NOT: "classroom management", "lesson planning"
+
+For DOCTORS: "Clinical Cardiology" NOT "Healthcare"
+For LAWYERS: "Corporate Law" NOT "Legal"
+For CHEFS:   "French Culinary Arts" NOT "Food Service"
+For CAs:     "Chartered Accountancy" NOT "Finance"
+
+═══ TOPIC NAMING RULES ═══
+
+Every topic MUST be a specific NAMED concept that people Google:
+  ✓ "Temporal Dead Zone"          ✗ "core JavaScript concept"
+  ✓ "React reconciliation"       ✗ "React performance topic"
+  ✓ "Newton's Third Law"         ✗ "physics fundamentals"
+  ✓ "NPV vs IRR"                 ✗ "finance concept"
+  ✓ "SOLID principles"           ✗ "general best practice"
+
+TIER RULES:
+  Tier 1 = things a junior must know (definitions, basics, "what is X")
+  Tier 2 = mid/senior knowledge (internals, tradeoffs, "how/why does X work")
+  Tier 3 = real-world scenarios (debugging, optimization, architecture)
+  Topics come from DOMAIN KNOWLEDGE, not from the resume text.
+
+EXAMPLES:
+  React Dev tier 1: "var vs let vs const", "useState hook", "props vs state", "JSX syntax", "event handling in React"
+  React Dev tier 2: "React reconciliation", "useCallback vs useMemo", "React Fiber", "code splitting", "virtual DOM diffing"
+  React Dev tier 3: "Debugging memory leaks in React", "Optimising re-renders in large apps", "Infinite scroll with 100k items"
+  Physics Teacher tier 1: "Newton's Laws of Motion", "Speed vs Velocity", "Ohm's Law", "Conservation of Energy", "Wave properties"
+  Finance tier 1: "Balance sheet structure", "NPV vs IRR", "Time value of money", "WACC", "Ratio analysis"
+
+seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
+is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales"""
+
+
+def _validate_and_fix_blueprint(data: dict, resume_text: str) -> dict:
+    """Validate blueprint quality and fix vague fields."""
+
+    # ── Fix vague domain ──
+    domain = str(data.get("primary_domain") or "").strip()
+    subject = str(data.get("subject_specialization") or "").strip()
+    role_type = str(data.get("role_type") or "").strip()
+
+    if domain.lower() in _VAGUE_DOMAINS or not domain:
+        # Try to derive from multiple signals.
+        stack = data.get("frameworks_and_stack") or data.get("tools_and_technologies") or []
+        lang = str(data.get("primary_language_or_tool") or "").strip()
+
+        if role_type in ("teacher", "instructor", "professor") and subject:
+            domain = f"{subject} Education"
+        elif role_type == "teacher" and not subject:
+            domain = "Education"  # can't do better without subject
+        elif stack:
+            domain = f"{lang} {stack[0]} Development".strip() if lang else f"{stack[0]} Development"
+        elif lang:
+            domain = f"{lang} Development"
+        elif subject:
+            domain = subject
+        else:
+            domain = "Software Development"
+        _log(f"[blueprint] vague domain '{data.get('primary_domain')}' → '{domain}'")
+
+    # ── Fix vague subject_specialization ──
+    if not subject or subject.lower() in _VAGUE_DOMAINS:
+        if role_type in ("teacher", "instructor", "professor"):
+            # Try to extract subject from domain.
+            for kw in ("Physics", "Chemistry", "Mathematics", "Math", "Biology",
+                       "History", "English", "Computer Science", "Geography",
+                       "Economics", "Accounting"):
+                if kw.lower() in domain.lower() or kw.lower() in (data.get("career_summary") or "").lower():
+                    subject = kw
+                    break
+        elif data.get("frameworks_and_stack"):
+            subject = data["frameworks_and_stack"][0]
+        elif data.get("primary_language_or_tool"):
+            subject = str(data["primary_language_or_tool"]).strip()
+
+    # ── Validate ladder topics are not vague ──
+    raw_ladder = data.get("knowledge_ladder") or {}
+    for tier_key in ("tier_1", "tier_2", "tier_3"):
+        tier = raw_ladder.get(tier_key) or {}
+        topics = tier.get("topics") or []
+        vague_count = sum(
+            1 for t in topics
+            if any(kw in (t if isinstance(t, str) else str(t.get("topic", ""))).lower()
+                   for kw in _VAGUE_TOPIC_KEYWORDS)
+        )
+        if vague_count > 1:
+            _log(f"[blueprint] {tier_key} has {vague_count} vague topics — LLM quality issue")
+
+    data["primary_domain"] = domain
+    data["subject_specialization"] = subject
+    return data
 
 
 async def extract_interview_blueprint(
@@ -1663,7 +1813,7 @@ async def extract_interview_blueprint(
         client, provider, resolved_key, model,
         system=BLUEPRINT_SYSTEM,
         messages=[{"role": "user", "content": build_blueprint_prompt(resume_text)}],
-        temperature=0.1,
+        temperature=0.05,
         max_tokens=2048,
         label="blueprint",
     )
@@ -1678,18 +1828,9 @@ async def extract_interview_blueprint(
     except json.JSONDecodeError as error:
         raise ProviderResponseError(f"Could not parse blueprint JSON: {error.msg}") from error
 
-    domain = str(data.get("primary_domain") or "").strip()
-    if domain.lower() in _VAGUE_DOMAINS or not domain:
-        # Try to derive from stack / skills / job titles.
-        stack = data.get("frameworks_and_stack") or data.get("tools_and_technologies") or []
-        lang = data.get("primary_language_or_tool") or ""
-        if stack:
-            domain = f"{lang} {stack[0]} Development".strip() if lang else f"{stack[0]} Development"
-        elif lang:
-            domain = f"{lang} Development"
-        else:
-            domain = "Software Development"
-        _log(f"[blueprint] vague domain detected; overriding to '{domain}'")
+    # Validate and fix vague fields.
+    data = _validate_and_fix_blueprint(data, resume_text)
+    domain = data["primary_domain"]
 
     # Parse embedded ladder.
     raw_ladder = data.get("knowledge_ladder") or {}
@@ -1717,12 +1858,27 @@ async def extract_interview_blueprint(
             "level": level_defaults.get(tier_key, tier_key),
             "label": str(tier.get("label") or label_defaults.get(tier_key, tier_key)).strip(),
             "description": str(tier.get("description", "")).strip(),
+            "focus": str(tier.get("focus", "")).strip(),
             "topics": topics,
         }
+
+    subject = str(data.get("subject_specialization") or "").strip()
+    role_type = str(data.get("role_type") or "").strip()
+
+    _log(
+        f"[blueprint] domain={domain}, subject={subject}, role_type={role_type}, "
+        f"seniority={data.get('seniority_level')}, years={data.get('experience_years')}, "
+        f"t1={[t['topic'] for t in ladder['tier_1']['topics']]}, "
+        f"t2={[t['topic'] for t in ladder['tier_2']['topics']]}, "
+        f"t3={[t['topic'] for t in ladder['tier_3']['topics']]}",
+        file=sys.stderr,
+    )
 
     return {
         "candidate_name": str(data.get("candidate_name") or "Candidate").strip(),
         "primary_domain": domain,
+        "subject_specialization": subject,
+        "role_type": role_type,
         "primary_language_or_tool": str(data.get("primary_language_or_tool") or "").strip(),
         "frameworks_and_stack": [str(s).strip() for s in (data.get("frameworks_and_stack") or []) if str(s).strip()][:8],
         "experience_years": int(data.get("experience_years") or 0),
@@ -1732,9 +1888,11 @@ async def extract_interview_blueprint(
         "tools_and_technologies": [str(t).strip() for t in (data.get("tools_and_technologies") or []) if str(t).strip()][:10],
         "domain_core_concepts": [str(c).strip() for c in (data.get("domain_core_concepts") or []) if str(c).strip()][:12],
         "knowledge_ladder": ladder,
+        "pedagogy_topics": [str(p).strip() for p in (data.get("pedagogy_topics") or []) if str(p).strip()][:6],
         "notable_projects": (data.get("notable_projects") or [])[:5],
         "career_summary": str(data.get("career_summary") or "").strip(),
         "behavioral_themes": [str(b).strip() for b in (data.get("behavioral_themes") or []) if str(b).strip()][:6],
+        "detection_reasoning": str(data.get("detection_reasoning") or "").strip(),
     }
 
 
