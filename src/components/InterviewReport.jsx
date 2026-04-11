@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useSelector } from 'react-redux';
 import {
   selectAnswers,
@@ -6,212 +7,246 @@ import {
   selectSessionDuration,
 } from '../store/interviewSelectors';
 
-function getMotivation(score) {
-  if (score >= 85) return {
-    emoji: '\uD83C\uDF1F',
-    headline: 'Outstanding Performance!',
-    message: "You're clearly operating at a high level. Companies would be lucky to have you. Keep this momentum going!",
-    color: '#64ffda',
-  };
-  if (score >= 70) return {
-    emoji: '\uD83D\uDE80',
-    headline: 'Strong Performance!',
-    message: "You've got solid fundamentals and real depth. A few focused improvements and you'll be absolutely interview-ready.",
-    color: '#3B82F6',
-  };
-  if (score >= 55) return {
-    emoji: '\uD83D\uDCAA',
-    headline: 'Good Start \u2014 Keep Pushing!',
-    message: "You showed real potential today. Every expert was once a beginner. The gaps identified are your roadmap \u2014 work them.",
-    color: '#ffd93d',
-  };
-  return {
-    emoji: '\uD83D\uDD25',
-    headline: 'Every Expert Started Here!',
-    message: "This is just the beginning. The fact that you showed up and practiced puts you ahead of 90% of candidates. Review the feedback and come back stronger.",
-    color: '#ff6b6b',
-  };
+function getTagline(score) {
+  if (score >= 85) return "You're interview ready.";
+  if (score >= 70) return "You're getting there.";
+  if (score >= 55) return 'Solid start. Keep going.';
+  return 'First session down. Many wins ahead.';
 }
 
-function getHireBadge(rec) {
-  const map = {
-    'Strong Hire': { icon: '\u2705', cls: 'hire-strong' },
-    'Hire':        { icon: '\uD83D\uDC4D', cls: 'hire-yes' },
-    'Maybe':       { icon: '\uD83E\uDD14', cls: 'hire-maybe' },
-    'No Hire':     { icon: '\u274C', cls: 'hire-no' },
-  };
-  return map[rec] || map['Maybe'];
+function getStatusLabel(score) {
+  if (score >= 80) return 'Strong';
+  if (score >= 60) return 'Good';
+  if (score >= 40) return 'Needs work';
+  return 'Focus here';
+}
+
+function getStatusCls(score) {
+  if (score >= 80) return 'strong';
+  if (score >= 60) return 'good';
+  if (score >= 40) return 'needs';
+  return 'focus';
 }
 
 export default function InterviewReport({ report, blueprint, onNewInterview }) {
-  const reduxAnswers    = useSelector(selectAnswers);
-  const overallScore    = useSelector(selectOverallScore);
-  const categoryScores  = useSelector(selectCategoryScores);
-  const duration        = useSelector(selectSessionDuration);
+  const [view, setView] = useState('summary');
+  const answers = useSelector(selectAnswers);
+  const overallScore = useSelector(selectOverallScore);
+  const categoryScores = useSelector(selectCategoryScores);
+  const duration = useSelector(selectSessionDuration);
+  const [expandedQ, setExpandedQ] = useState({});
 
   if (!report) return null;
 
   const score = report.overall_score ?? overallScore;
-  const motivation = getMotivation(score);
-  const hireBadge = getHireBadge(report.hire_recommendation);
-  const catScores = report.category_scores || {};
-  const answers = reduxAnswers.length > 0 ? reduxAnswers : [];
+  const name = blueprint?.candidate_name || 'Candidate';
+  const domain = blueprint?.primary_domain || '';
+  const answeredCount = answers.length;
+  const totalQ = 12;
+
+  // Find strongest & weakest categories.
+  const sorted = [...categoryScores].sort((a, b) => b.score - a.score);
+  const strongest = sorted[0];
+  const weakest = sorted[sorted.length - 1];
+
+  // Pick 2 best answers for highlight reel.
+  const highlights = [...answers]
+    .filter(a => a.score >= 50 && a.answer)
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    .slice(0, 2);
+
+  const nextSteps = report.next_steps || [];
+
+  const toggleQ = (i) => setExpandedQ(prev => ({ ...prev, [i]: !prev[i] }));
 
   return (
-    <div className="rpt slide-up">
+    <div className="db slide-up">
 
-      {/* Header */}
-      <div className="rpt-header">
-        <h2 className="rpt-title">Interview Complete</h2>
-        {blueprint && (
-          <p className="rpt-sub">
-            {blueprint.candidate_name || 'Candidate'} · {blueprint.primary_domain} · {duration > 0 ? `${duration} mins` : ''}
-          </p>
-        )}
-      </div>
-
-      {/* Motivation Banner */}
-      <div className="rpt-motivation" style={{ borderColor: motivation.color }}>
-        <span className="rpt-motivation-emoji">{motivation.emoji}</span>
-        <div>
-          <h3 className="rpt-motivation-headline" style={{ color: motivation.color }}>
-            {motivation.headline}
-          </h3>
-          <p className="rpt-motivation-msg">{motivation.message}</p>
-        </div>
-      </div>
-
-      {/* Score + Grade + Hire */}
-      <div className="rpt-score-row">
-        <div className="rpt-ring">
-          <svg width="130" height="130" viewBox="0 0 130 130">
-            <circle cx="65" cy="65" r="55" fill="none" stroke="var(--bg-3)" strokeWidth="10" />
-            <circle cx="65" cy="65" r="55" fill="none"
-              stroke={motivation.color} strokeWidth="10"
-              strokeDasharray={`${(score / 100) * 345.6} 345.6`}
-              strokeLinecap="round" transform="rotate(-90 65 65)"
-              style={{ transition: 'stroke-dasharray 1s ease' }}
-            />
-            <text x="65" y="60" textAnchor="middle" fill={motivation.color} fontSize="28" fontWeight="800">{score}</text>
-            <text x="65" y="80" textAnchor="middle" fill="var(--text-3)" fontSize="11">out of 100</text>
-          </svg>
-        </div>
-
-        <div className="rpt-grade-block">
-          <div className="rpt-grade" style={{ color: motivation.color }}>
-            {report.grade || '\u2014'}
-          </div>
-          <div className="rpt-grade-label">Grade</div>
-        </div>
-
-        <div className={`rpt-hire-badge ${hireBadge.cls}`}>
-          <span>{hireBadge.icon}</span>
-          <div>
-            <div className="rpt-hire-label">Recommendation</div>
-            <div className="rpt-hire-value">{report.hire_recommendation || '\u2014'}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Summary */}
-      {report.summary && (
-        <div className="rpt-card rpt-summary-card">
-          <p className="rpt-summary-text">{report.summary}</p>
-        </div>
-      )}
-
-      {/* Category Breakdown */}
-      {(Object.keys(catScores).length > 0 || categoryScores.length > 0) && (
-        <div className="rpt-card">
-          <h3 className="rpt-card-title">Performance Breakdown</h3>
-          {(categoryScores.length > 0 ? categoryScores : Object.entries(catScores).map(([k, v]) => ({ name: k, score: (v?.score ?? 0) * 10 }))).map(cat => (
-            <div key={cat.name} className="rpt-bar-row">
-              <span className="rpt-bar-name">{cat.name.replace(/_/g, ' ')}</span>
-              <div className="rpt-bar-track">
-                <div
-                  className="rpt-bar-fill"
-                  style={{
-                    width: `${cat.score}%`,
-                    background: cat.score >= 70 ? 'var(--accent)' : cat.score >= 50 ? 'var(--yellow)' : 'var(--red)',
-                  }}
-                />
-              </div>
-              <span className="rpt-bar-pct">{cat.score}%</span>
+      {/* ── Summary View ── */}
+      {view === 'summary' && (
+        <>
+          {/* Headline Block */}
+          <div className="db-headline">
+            <h2 className="db-name">{name}</h2>
+            <p className="db-meta">{domain}{duration > 0 ? ` \u00B7 ${duration} mins` : ''}</p>
+            <div className="db-score">{score}</div>
+            <p className="db-tagline">{getTagline(score)}</p>
+            <div className="db-quick-stats">
+              {strongest && <span className="db-qs good">{'\u2713'} {sorted.filter(c => c.score >= 60).length} questions strong</span>}
+              {weakest && weakest.score < 60 && <span className="db-qs improve">{'\u2192'} {sorted.filter(c => c.score < 60).length} areas to level up</span>}
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* Strengths */}
-      {report.strengths?.length > 0 && (
-        <div className="rpt-card">
-          <h3 className="rpt-card-title">Your Strengths</h3>
-          <ul className="rpt-list rpt-list--good">
-            {report.strengths.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-        </div>
-      )}
-
-      {/* Improvement Areas */}
-      {report.improvement_areas?.length > 0 && (
-        <div className="rpt-card">
-          <h3 className="rpt-card-title">Areas to Improve</h3>
-          <p className="rpt-improve-note">These aren't weaknesses — they're your next milestones. Every one is learnable.</p>
-          <ul className="rpt-list rpt-list--improve">
-            {report.improvement_areas.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-        </div>
-      )}
-
-      {/* Question by Question */}
-      {answers.length > 0 && (
-        <div className="rpt-card">
-          <h3 className="rpt-card-title">Question by Question</h3>
-          <div className="rpt-qlist">
-            {answers.map((a, i) => (
-              <div key={i} className="rpt-qitem">
-                <div className="rpt-qitem-header">
-                  <span className="rpt-qitem-num">Q{a.questionIndex || i + 1}</span>
-                  <span className="rpt-qitem-cat">{(a.category || '').replace(/_/g, ' ')}</span>
-                  <span className={`rpt-qitem-score ${(a.score ?? 0) >= 70 ? 'good' : (a.score ?? 0) >= 40 ? 'mid' : 'bad'}`}>
-                    {a.score ?? '\u2014'}/100
-                  </span>
-                </div>
-                <p className="rpt-qitem-q">{a.question}</p>
-                <p className="rpt-qitem-a"><strong>Your answer:</strong> {a.answer}</p>
-                {a.strength && <p className="rpt-qitem-fb">Covered: {a.strength}</p>}
-                {a.missing && a.missing !== 'None' && <p className="rpt-qitem-miss">Missed: {a.missing}</p>}
-              </div>
-            ))}
           </div>
-        </div>
+
+          {/* 3 Stat Cards */}
+          <div className="db-stat-row">
+            <div className="db-stat-card">
+              <div className="db-stat-value">{answeredCount} / {totalQ}</div>
+              <div className="db-stat-label">answered</div>
+            </div>
+            <div className="db-stat-card">
+              <div className="db-stat-value">{strongest?.name?.replace(/_/g, ' ') || '\u2014'}</div>
+              <div className="db-stat-label">{strongest ? `${strongest.score}%` : 'strongest'}</div>
+            </div>
+            <div className="db-stat-card">
+              <div className="db-stat-value">{weakest?.name?.replace(/_/g, ' ') || '\u2014'}</div>
+              <div className="db-stat-label">{weakest ? `${weakest.score}%` : 'focus here'}</div>
+            </div>
+          </div>
+
+          {/* Highlight Reel */}
+          {highlights.length > 0 && (
+            <div className="db-highlights">
+              {highlights.map((h, i) => (
+                <div key={i} className="db-highlight-card">
+                  <div className="db-hl-header">
+                    Q{h.questionIndex || i + 1} {'\u00B7'} {(h.section || h.category || '').replace(/_/g, ' ')}
+                  </div>
+                  <p className="db-hl-quote">"{h.answer?.slice(0, 120)}{h.answer?.length > 120 ? '...' : ''}"</p>
+                  {h.strength && (
+                    <p className="db-hl-why">{'\u2713'} {h.strength}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Next Steps */}
+          {nextSteps.length > 0 && (
+            <div className="db-next">
+              <h3 className="db-next-title">What to do next</h3>
+              <ol className="db-next-list">
+                {nextSteps.slice(0, 3).map((s, i) => <li key={i}>{s}</li>)}
+              </ol>
+            </div>
+          )}
+        </>
       )}
 
-      {/* Next Steps / Action Plan */}
-      {report.next_steps?.length > 0 && (
-        <div className="rpt-card rpt-action-card">
-          <h3 className="rpt-card-title">Your Action Plan</h3>
-          <ol className="rpt-steps">
-            {report.next_steps.map((s, i) => <li key={i}>{s}</li>)}
-          </ol>
-        </div>
-      )}
+      {/* ── Detail View ── */}
+      {view === 'detail' && (
+        <>
+          {/* Performance Breakdown */}
+          {categoryScores.length > 0 && (
+            <div className="db-section">
+              <h3 className="db-section-title">Performance Breakdown</h3>
+              {categoryScores.map(cat => (
+                <div key={cat.name} className="db-perf-row">
+                  <span className="db-perf-name">{cat.name.replace(/_/g, ' ')}</span>
+                  <div className="db-perf-track">
+                    <div className={`db-perf-fill ${getStatusCls(cat.score)}`} style={{ width: `${cat.score}%` }} />
+                  </div>
+                  <span className="db-perf-pct">{cat.score}%</span>
+                  <span className={`db-perf-label ${getStatusCls(cat.score)}`}>{getStatusLabel(cat.score)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
-      {/* Final Motivation */}
-      <div className="rpt-final">
-        <p className="rpt-quote">"The expert in anything was once a beginner."</p>
-        <p className="rpt-quote-sub">Every interview you practice makes the real one easier.</p>
-      </div>
+          {/* Question by Question — collapsible */}
+          {answers.length > 0 && (
+            <div className="db-section">
+              <h3 className="db-section-title">Question by Question</h3>
+              <div className="db-q-list">
+                {answers.map((a, i) => {
+                  const open = !!expandedQ[i];
+                  return (
+                    <div key={i} className={`db-q-card${open ? ' open' : ''}`}>
+                      <button className="db-q-toggle" type="button" onClick={() => toggleQ(i)}>
+                        <span className="db-q-arrow">{open ? '\u25BC' : '\u25B6'}</span>
+                        <span className="db-q-num">Q{a.questionIndex || i + 1}</span>
+                        <span className="db-q-cat">{(a.category || '').replace(/_/g, ' ')}</span>
+                        <span className={`db-q-score ${getStatusCls(a.score ?? 0)}`}>{a.score ?? '\u2014'}%</span>
+                        <span className="db-q-preview">{a.question?.slice(0, 50)}{a.question?.length > 50 ? '...' : ''}</span>
+                      </button>
+                      {open && (
+                        <div className="db-q-body">
+                          <p className="db-q-full">{a.question}</p>
+                          <div className="db-q-answer">
+                            <span className="db-q-answer-label">Your answer</span>
+                            <p>"{a.answer}"</p>
+                          </div>
+                          {a.strength && (
+                            <div className="db-q-covered">
+                              <span>{'\u2713'} Covered</span>
+                              <p>{a.strength}</p>
+                            </div>
+                          )}
+                          {a.missing && a.missing !== 'None' && (
+                            <div className="db-q-missed">
+                              <span>{'\u2717'} Missed</span>
+                              <p>{a.missing}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Growth Map */}
+          {(report.improvement_areas?.length > 0 || nextSteps.length > 0) && (
+            <div className="db-section">
+              <h3 className="db-section-title">Growth Map</h3>
+              <div className="db-growth">
+                <div className="db-growth-start">You are here</div>
+                {(report.improvement_areas || nextSteps).slice(0, 3).map((item, i) => (
+                  <div key={i} className="db-growth-node">
+                    <div className="db-growth-line" />
+                    <div className="db-growth-box">{item}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Study List */}
+          {report.improvement_areas?.length > 0 && (
+            <div className="db-section">
+              <h3 className="db-section-title">Before your next session</h3>
+              <div className="db-study-list">
+                {report.improvement_areas.slice(0, 4).map((topic, i) => (
+                  <div key={i} className="db-study-card">
+                    <div className="db-study-topic">{topic}</div>
+                    <div className="db-study-meta">Focus area {'\u00B7'} ~20 mins</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {/* Actions */}
-      <div className="rpt-actions">
+      <div className="db-actions">
         <button className="action-btn primary" type="button" onClick={onNewInterview}>
           Start New Interview
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
         </button>
         <button className="action-btn outline" type="button" onClick={() => window.print()}>
           Download Report
         </button>
+      </div>
+
+      {/* Toggle Pill — fixed bottom */}
+      <div className="db-toggle-wrap">
+        <div className="db-toggle">
+          <button
+            className={`db-toggle-btn${view === 'summary' ? ' active' : ''}`}
+            type="button"
+            onClick={() => setView('summary')}
+          >
+            Summary
+          </button>
+          <button
+            className={`db-toggle-btn${view === 'detail' ? ' active' : ''}`}
+            type="button"
+            onClick={() => setView('detail')}
+          >
+            Full Report
+          </button>
+        </div>
       </div>
     </div>
   );

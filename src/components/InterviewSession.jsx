@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
@@ -9,6 +9,7 @@ import InterviewProgress from './InterviewProgress';
 import InterviewReport from './InterviewReport';
 import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport } from '../api';
 import { submitAnswer as dispatchAnswer, addQuestion, setReport as dispatchReport } from '../store/interviewSlice';
+import { selectAnswers as selectReduxAnswers } from '../store/interviewSelectors';
 
 function appendTranscript(currentText, incomingText) {
   if (!incomingText) return currentText;
@@ -46,6 +47,7 @@ export default function InterviewSession({
   const [loadingNext, setLoadingNext] = useState(false);
   const [report, setReport] = useState(null);
   const dispatch = useDispatch();
+  const reduxAnswers = useSelector(selectReduxAnswers);
   const [loadingReport, setLoadingReport] = useState(false);
   const [history, setHistory] = useState([
     { role: 'assistant', section: initialSection || 'Introduction', category: initialCategory || 'intro', text: initialQuestion },
@@ -214,6 +216,7 @@ export default function InterviewSession({
         settings.provider,
         settings.apiKey,
         settings.model,
+        reduxAnswers,
       );
       setReport(data.report);
       dispatch(dispatchReport(data.report));

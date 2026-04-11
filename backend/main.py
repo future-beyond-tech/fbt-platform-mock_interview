@@ -714,6 +714,7 @@ class InterviewReportRequest(BaseModel):
     provider: str = "gemini"
     api_key: str = ""
     model: str = ""
+    answers: list[dict] = []  # Frontend answers with scores from Redux store
 
 
 @app.post("/api/interview/report")
@@ -724,7 +725,9 @@ async def interview_report(req: InterviewReportRequest):
         raise HTTPException(status_code=404, detail="Interview session not found or expired.")
 
     blueprint = session["blueprint"]
-    answers = session["state"].get("answers", [])
+    # Prefer frontend answers (they have scores from /api/evaluate).
+    # Backend answers only have question+answer, no scores.
+    answers = req.answers if req.answers else session["state"].get("answers", [])
     provider = req.provider or session["provider"]
     model = req.model or session["model"]
 
