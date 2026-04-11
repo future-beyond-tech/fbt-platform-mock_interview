@@ -154,13 +154,62 @@ def resolve_api_key(provider: str, api_key: str) -> str:
     raise ClientInputError(f"{PROVIDER_DISPLAY_NAMES[provider]} API key is required")
 
 EVAL_SYSTEM = (
-    "You are a senior JavaScript/React technical interviewer evaluating a candidate with 8+ years of experience. "
-    "You evaluate answers SEMANTICALLY — you understand the INTENT and KNOWLEDGE behind words, "
-    "not just literal phrasing. The candidate may have used voice-to-text, so minor transcription "
-    "errors (e.g. 'letten' for 'let and', 'ESG' for 'ES6', 'temporal dead son' for 'temporal dead zone') "
-    "should be interpreted charitably as the correct technical term. "
-    "Judge what the candidate KNOWS, not how perfectly they phrased it."
+    "You are a senior technical interviewer. Evaluate SEMANTICALLY — intent and knowledge, not perfect phrasing. "
+    "Voice-to-text errors should be read charitably (e.g. 'letten' → 'let and', 'ESG' → 'ES6'). "
+    "Feedback must sound like a senior peer who redirects without blame: never say wrong, failed, or nonsensical about the person. "
+    "Judge what the candidate KNOWS."
 )
+
+
+def _truncate_words(s: str, max_words: int) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    words = s.split()
+    if len(words) <= max_words:
+        return s
+    return " ".join(words[:max_words])
+
+
+def _gaps_from_missing(missing: str) -> list[str]:
+    if not missing or not str(missing).strip():
+        return []
+    m = str(missing).strip()
+    if m.lower() == "none":
+        return []
+    if "|||" in m:
+        parts = [p.strip() for p in m.split("|||")]
+    elif "\n" in m:
+        parts = [p.strip() for p in m.split("\n") if p.strip()]
+    elif " · " in m:
+        parts = [p.strip() for p in m.split(" · ")]
+    else:
+        parts = [m]
+    out: list[str] = []
+    for p in parts:
+        if p and p.lower() != "none":
+            t = _truncate_words(p, 8)
+            if t:
+                out.append(t)
+        if len(out) >= 2:
+            break
+    return out[:2]
+
+
+def _normalize_gaps_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        t = _truncate_words(item, 8)
+        if t and t.lower() != "none":
+            out.append(t)
+        if len(out) >= 2:
+            break
+    return out
+
 
 def build_eval_prompt(section: str, question: str, answer: str) -> str:
     return f"""Section: {section}
@@ -168,23 +217,24 @@ Question: {question}
 Candidate answer: {answer}
 
 EVALUATION INSTRUCTIONS:
-1. SEMANTIC INTERPRETATION: First, mentally correct any obvious voice transcription errors in the answer (e.g. "letten const" → "let and const", "ESG6" → "ES6", "temporal dead son" → "temporal dead zone"). Evaluate the corrected meaning.
-
-2. CONCEPT EXTRACTION: Identify the 3-5 key concepts this question requires. For each concept, determine if the candidate demonstrated understanding (even partially or indirectly).
-
+1. SEMANTIC INTERPRETATION: Mentally correct obvious voice transcription errors, then evaluate meaning.
+2. CONCEPT EXTRACTION: Identify 3–5 key concepts this question requires; note what the answer demonstrated.
 3. SCORING RUBRIC:
-   - 85-100 (correct): Covers all key concepts accurately, even if not perfectly worded
-   - 50-84 (partial): Demonstrates clear understanding of some concepts but misses others
-   - 20-49 (partial): Shows awareness of the topic but with significant gaps
-   - 0-19 (incorrect): Does not demonstrate meaningful understanding of the core concepts
+   - 85-100 (correct): Covers key concepts accurately
+   - 50-84 (partial): Clear understanding of some concepts, misses others
+   - 20-49 (partial): Awareness with significant gaps
+   - 0-19 (incorrect): No meaningful understanding of core concepts
+4. VERDICT: "correct" if score >= 75; "partial" if score >= 30; "incorrect" if score < 30
 
-4. VERDICT RULES:
-   - "correct" if score >= 75
-   - "partial" if score >= 30
-   - "incorrect" if score < 30
+FEEDBACK VOICE (senior peer — concise coaching card):
+- strength: ONE line, max 6 words, genuine signal only. Use "" if nothing real to affirm — forbid filler phrases like "Attempted", "Tried", "Managed to".
+- gaps: JSON array of 0–2 strings. Each max 8 words — neutral description of the gap (what was thin or absent), not blame. Use [] if nothing material.
+- missing: Same content as gaps joined with " · " (for legacy clients).
+- hint: Coaching redirect for next time, max 12 words — NOT a question. Do NOT start with "You should", "You need to", "You must". Use "" when there is nothing to add.
+- ideal: Max 3 sentences, first person, natural strong answer (not labeled perfect or correct).
 
 Respond with ONLY a raw JSON object — no markdown, no backticks, no explanation outside the JSON:
-{{"score": <integer 0-100>, "verdict": "correct"|"partial"|"incorrect", "strength": "<specific concepts they demonstrated correctly — be generous with partial credit>", "missing": "<specific concepts not covered or incorrect — be precise>", "hint": "<Socratic question pointing toward the gap, empty string if correct>", "ideal": "<concise ideal answer covering all key concepts in 2-3 sentences>"}}"""
+{{"score": <integer 0-100>, "verdict": "correct"|"partial"|"incorrect", "strength": "<string>", "gaps": ["<optional>", "<optional>"], "missing": "<string>", "hint": "<string>", "ideal": "<string>"}}"""
 
 
 def parse_eval_json(text: str) -> dict | None:
@@ -220,13 +270,32 @@ def parse_eval_json(text: str) -> dict | None:
     verdict = data.get("verdict", "incorrect")
     if verdict not in ("correct", "partial", "incorrect"):
         verdict = "incorrect"
+
+    strength = _truncate_words(str(data.get("strength", "")), 6)
+    missing_raw = str(data.get("missing", ""))
+    hint = _truncate_words(str(data.get("hint", "")), 12)
+    ideal = str(data.get("ideal", ""))[:1000]
+
+    gaps = _normalize_gaps_list(data.get("gaps"))
+    if not gaps:
+        gaps = _gaps_from_missing(missing_raw)
+
+    missing_lower = missing_raw.strip().lower()
+    if gaps:
+        missing_out = " · ".join(gaps)[:500]
+    elif missing_lower and missing_lower != "none":
+        missing_out = missing_raw.strip()[:500]
+    else:
+        missing_out = ""
+
     return {
         "score": score,
         "verdict": verdict,
-        "strength": str(data.get("strength", ""))[:500],
-        "missing": str(data.get("missing", ""))[:500],
-        "hint": str(data.get("hint", ""))[:500],
-        "ideal": str(data.get("ideal", ""))[:1000],
+        "strength": strength[:500],
+        "missing": missing_out,
+        "gaps": gaps,
+        "hint": hint[:500],
+        "ideal": ideal,
     }
 
 
@@ -1128,12 +1197,31 @@ CATEGORY_LABELS: dict[str, str] = {
 }
 
 
+_INTRO_QUESTIONS = [
+    "Tell me about yourself — walk me through your background, what you've been working on, and what brings you here today.",
+    "Start us off by giving me a quick overview of who you are, your career so far, and what you're looking for next.",
+    "In your own words, describe your professional journey — what got you into this field and where you are now.",
+    "Give me the highlight reel of your career: where you started, what you've built, and what excites you about your next move.",
+    "Walk me through your background — your experience, what you've been focused on recently, and why you're here.",
+    "Before we dive in, tell me a bit about yourself — your path, your current role, and what brought you to this conversation.",
+    "Let's start with you — tell me about your experience, what kind of work you enjoy most, and what you're looking to do next.",
+]
+
+_WRAP_QUESTIONS = [
+    "That wraps up my questions. Do you have anything you'd like to ask me, or is there anything about your experience you feel we didn't get to cover?",
+    "We're coming to the end of our time — is there anything you'd like to ask, or something important about yourself you'd like to add?",
+    "Before we finish, do you have any questions for me? And is there anything you feel didn't come up that you'd want me to know?",
+    "That's all from my side. What questions do you have, and is there anything you'd like to clarify or expand on?",
+    "We've covered a lot of ground — any questions on your end? And is there something you feel would be important for us to discuss before we wrap up?",
+    "Last question: what would you like to ask me? Also, is there anything about your background or skills we didn't touch on that you'd like to highlight?",
+    "That brings us to a close. Do you have any questions, or is there anything you'd like to revisit from earlier in our conversation?",
+]
+
+
 def get_intro_question() -> dict:
+    import random
     return {
-        "question": (
-            "Tell me about yourself — walk me through your background, "
-            "what you've been working on, and what brings you here today."
-        ),
+        "question": random.choice(_INTRO_QUESTIONS),
         "topic": "introduction",
         "category": "intro",
         "difficulty": "easy",
@@ -1142,12 +1230,9 @@ def get_intro_question() -> dict:
 
 
 def get_wrap_question() -> dict:
+    import random
     return {
-        "question": (
-            "That wraps up my questions. Do you have anything you'd like "
-            "to ask me, or is there anything about your experience you feel "
-            "we didn't get to cover?"
-        ),
+        "question": random.choice(_WRAP_QUESTIONS),
         "topic": "wrap_up",
         "category": "wrap",
         "difficulty": "easy",
@@ -1516,14 +1601,27 @@ async def _generate_resume_overview_question(
 ) -> dict:
     """Generate one light career overview question."""
     import random
-    prompt = f"""You are a senior interviewer. Ask ONE warm-up question about this candidate's
-overall career journey. Keep it broad and conversational.
+    angles = [
+        "Ask about the biggest career pivot or transition they've made and what drove it.",
+        "Ask what has been the most defining project or role in shaping their current expertise.",
+        "Ask how they ended up specialising in their domain — was it intentional or circumstantial?",
+        "Ask what they're most proud of in their career so far and why.",
+        "Ask what a typical challenge looks like in their day-to-day and how they approach it.",
+        "Ask how their role or responsibilities have evolved over the years.",
+        "Ask what motivated them to move into their current area of focus.",
+    ]
+    chosen_angle = random.choice(angles)
+    prompt = f"""You are a senior interviewer conducting a warm-up question for a structured interview.
+Ask ONE broad, conversational question based on this angle:
 
+ANGLE: {chosen_angle}
+
+Candidate context:
 Domain: {blueprint.get('primary_domain', 'General')}
 Seniority: {blueprint.get('seniority_level', 'mid')}
 Career Summary: {blueprint.get('career_summary', 'Not provided')}
 
-SESSION SEED: {random.randint(1000, 9999)} — vary the angle each session.
+Keep the question SHORT (1-2 sentences), natural, and open-ended. Do not repeat a generic "tell me about yourself" question.
 
 Return JSON only:
 {{"question": "...", "topic": "career_overview", "category": "resume_overview", "difficulty": "easy", "what_to_evaluate": "..."}}"""
@@ -2252,20 +2350,24 @@ Is technical:     {is_tech}
 - Judge this answer as a {level} {role}, NOT as a software engineer.
 
 EVALUATION INSTRUCTIONS:
-1. SEMANTIC INTERPRETATION: First, mentally correct any obvious voice transcription errors in the answer. Evaluate the corrected meaning.
-2. CONCEPT EXTRACTION: Identify the 3-5 key things this question requires. For each, decide if the candidate demonstrated understanding (even partially).
-3. SCORING RUBRIC (apply leniency for the candidate's level above):
-   - 85-100 (correct): Covers all key points accurately for a {level} {role}, even if not perfectly worded
-   - 50-84 (partial): Demonstrates clear understanding of some points but misses others
-   - 20-49 (partial): Shows awareness of the topic but with significant gaps
-   - 0-19 (incorrect): Does not demonstrate meaningful understanding or is irrelevant/blank
-4. VERDICT RULES:
-   - "correct" if score >= 75
-   - "partial" if score >= 30
-   - "incorrect" if score < 30
+1. SEMANTIC INTERPRETATION: Correct obvious voice transcription errors mentally, then evaluate meaning.
+2. CONCEPT EXTRACTION: Identify 3–5 key things this question requires; note what the answer showed for a {level} {role}.
+3. SCORING RUBRIC (apply leniency above):
+   - 85-100 (correct): Covers key points accurately for a {level} {role}
+   - 50-84 (partial): Clear understanding of some points, misses others
+   - 20-49 (partial): Awareness with significant gaps
+   - 0-19 (incorrect): No meaningful understanding or irrelevant/blank
+4. VERDICT: "correct" if score >= 75; "partial" if score >= 30; "incorrect" if score < 30
+
+FEEDBACK VOICE (senior peer — concise coaching card, {domain} terminology):
+- strength: ONE line, max 6 words, genuine signal only in {domain} terms. Use "" if nothing real — forbid "Attempted", "Tried", "Managed to".
+- gaps: JSON array of 0–2 strings. Each max 8 words — neutral gap, not blame. Use [] if nothing material.
+- missing: Same gaps joined with " · ".
+- hint: Coaching redirect, max 12 words — NOT a question. Do NOT start with "You should", "You need to", "You must". Use "" if nothing to add.
+- ideal: Max 3 sentences, first person, as a strong {role} would say it.
 
 Respond with ONLY a raw JSON object — no markdown, no backticks, no explanation outside the JSON:
-{{"score": <integer 0-100>, "verdict": "correct"|"partial"|"incorrect", "strength": "<specific things they demonstrated correctly in {domain} terms — be generous with partial credit>", "missing": "<specific {domain}-relevant points they missed — be precise>", "hint": "<Socratic question pointing toward the gap, empty string if correct>", "ideal": "<concise ideal answer in 2-3 sentences, phrased as a real {role} would say it>"}}"""
+{{"score": <integer 0-100>, "verdict": "correct"|"partial"|"incorrect", "strength": "<string>", "gaps": ["<optional>", "<optional>"], "missing": "<string>", "hint": "<string>", "ideal": "<string>"}}"""
 
 
 # ─── Transcript cleanup ───────────────────────────────────

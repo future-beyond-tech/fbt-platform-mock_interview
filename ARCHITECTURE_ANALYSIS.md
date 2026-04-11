@@ -1,7 +1,7 @@
-# FBT Mock Interview — Architecture Analysis & Recommendation
+# InterVu — Architecture Analysis & Recommendation
 
 **Date:** April 10, 2026  
-**Project:** FBT Mock Interview Simulator  
+**Project:** InterVu Simulator  
 **Stack:** React 19 (Vite) + FastAPI (Python) + Multi-Provider LLM
 
 ---
