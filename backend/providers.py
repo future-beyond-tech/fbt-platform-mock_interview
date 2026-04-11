@@ -1316,12 +1316,13 @@ async def _generate_ladder_question(
     session_state: dict,
 ) -> dict:
     """Generate one question from a specific tier of the knowledge ladder."""
+    import random
+
     tier = ladder.get(tier_key, {})
     topics = tier.get("topics") or []
     if not topics:
-        # Fallback if no ladder topics available.
         return {
-            "question": f"Tell me about a core concept in {blueprint.get('primary_domain', 'your field')} that you think is underappreciated.",
+            "question": f"Tell me about a core concept in {blueprint.get('primary_domain', 'your field')} that you find most important in practice.",
             "topic": tier_key,
             "category": tier_key,
             "difficulty": "medium",
@@ -1329,14 +1330,13 @@ async def _generate_ladder_question(
         }
 
     asked_topics = session_state.get("askedTopics") or []
-    # Find an untested topic.
-    topic = None
-    for t in topics:
-        if t["topic"] not in asked_topics:
-            topic = t
-            break
-    if not topic:
-        topic = topics[topic_index % len(topics)]
+    # Shuffle untested topics so each session gets a different order.
+    untested = [t for t in topics if t["topic"] not in asked_topics]
+    if untested:
+        random.shuffle(untested)
+        topic = untested[0]
+    else:
+        topic = random.choice(topics)
 
     asked_qs = session_state.get("questionsAsked") or []
     primary_lang = blueprint.get("primary_language_or_tool") or ""
@@ -1379,6 +1379,9 @@ IMPORTANT:
 - NEVER ask teaching/soft-skill questions in Tier 1 or 2
 - ALWAYS reference "{topic['topic']}" by name in the question
 - Must be answerable by someone expert in {subject}
+- Ask from a DIFFERENT ANGLE than previous sessions — vary the framing, scenario, or focus area each time
+
+SESSION SEED: {random.randint(1000, 9999)} (use this to vary your question framing)
 
 QUESTIONS ALREADY ASKED (never repeat):
 {chr(10).join(f'- {q}' for q in asked_qs[-8:]) or 'None yet'}
@@ -1409,6 +1412,7 @@ async def _generate_project_question(
     session_state: dict,
 ) -> dict:
     """Generate a project deep-dive question from the resume."""
+    import random
     projects = blueprint.get("notable_projects") or []
     asked_projects = session_state.get("askedProjects") or []
     asked_qs = session_state.get("questionsAsked") or []
@@ -1432,6 +1436,8 @@ QUESTIONS ALREADY ASKED:
 
 Ask about a SPECIFIC project from the resume. Focus on decisions, challenges, outcomes, and what they'd change. Do NOT repeat the same project.
 Keep the question SHORT — 1-3 sentences, under 50 words. Ask ONE focused thing like a real interviewer would.
+Vary the angle each session — sometimes ask about challenges, sometimes outcomes, sometimes architecture decisions.
+SESSION SEED: {random.randint(1000, 9999)}
 
 Return JSON only:
 {{"question": "...", "topic": "...", "category": "project_based", "difficulty": "medium", "what_to_evaluate": "..."}}"""
@@ -1457,6 +1463,7 @@ async def _generate_behavioral_question(
     session_state: dict,
 ) -> dict:
     """Generate a behavioral/STAR question tailored to seniority. For teachers, uses pedagogy_topics."""
+    import random
     asked_qs = session_state.get("questionsAsked") or []
     themes = blueprint.get("behavioral_themes") or []
     pedagogy = blueprint.get("pedagogy_topics") or []
@@ -1482,6 +1489,7 @@ QUESTIONS ALREADY ASKED:
 Ask a situational/behavioral question using STAR format expectation.
 Tailor to seniority: junior=learning/adapting, mid=collaboration/ownership,
 senior=influence/mentoring, lead=team performance/strategy.
+SESSION SEED: {random.randint(1000, 9999)} — vary the scenario each session.
 Keep the question SHORT — 1-3 sentences, under 50 words. Ask ONE focused thing.
 
 Return JSON only:
@@ -1507,12 +1515,15 @@ async def _generate_resume_overview_question(
     blueprint: dict,
 ) -> dict:
     """Generate one light career overview question."""
+    import random
     prompt = f"""You are a senior interviewer. Ask ONE warm-up question about this candidate's
 overall career journey. Keep it broad and conversational.
 
 Domain: {blueprint.get('primary_domain', 'General')}
 Seniority: {blueprint.get('seniority_level', 'mid')}
 Career Summary: {blueprint.get('career_summary', 'Not provided')}
+
+SESSION SEED: {random.randint(1000, 9999)} — vary the angle each session.
 
 Return JSON only:
 {{"question": "...", "topic": "career_overview", "category": "resume_overview", "difficulty": "easy", "what_to_evaluate": "..."}}"""
@@ -1604,7 +1615,29 @@ _VAGUE_TOPIC_KEYWORDS = {
 }
 
 
+def _random_exclusion_hint(seed: int) -> str:
+    """Generate a random instruction that forces the LLM to vary topic selection."""
+    import random
+    rng = random.Random(seed)
+    strategies = [
+        "Start your tier 1 list with the LEAST obvious foundational topic in this domain.",
+        "Pick at least 2 topics that a typical interviewer would FORGET to ask about.",
+        "Avoid the 5 most commonly Googled topics in this field — go deeper.",
+        "Include at least 1 topic that would surprise the candidate.",
+        "Focus tier 1 on practical fundamentals, not textbook definitions.",
+        "For tier 2, pick topics that reveal real experience vs memorized answers.",
+        "Include 1 cross-disciplinary topic that connects to an adjacent field.",
+        "Pick topics that test understanding, not just recall.",
+        "Start with a topic most candidates get wrong in interviews.",
+        "For tier 3, pick a scenario the candidate likely faced but never prepared for.",
+    ]
+    picked = rng.sample(strategies, 3)
+    return "\n".join(f"- {s}" for s in picked)
+
+
 def build_blueprint_prompt(resume_text: str) -> str:
+    import random
+    seed = random.randint(10000, 99999)
     return f"""Analyse this resume carefully using MULTIPLE signals (job titles, skills,
 projects, tools, education). Extract a precise interview blueprint with role detection
 and a progressive knowledge ladder.
@@ -1737,7 +1770,15 @@ EXAMPLES:
   Finance tier 1: "Balance sheet structure", "NPV vs IRR", "Time value of money", "WACC", "Ratio analysis"
 
 seniority_level: 0-2 yrs=junior, 2-5=mid, 5-10=senior, 10+=lead/manager
-is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales"""
+is_technical: true for software/devops/data engineering; false for teaching/HR/marketing/sales
+
+VARIATION RULE (CRITICAL):
+Every domain has 30-50+ valid interview topics. You MUST pick different ones each session.
+Do NOT default to the 5 most obvious topics — go broader.
+SESSION SEED: {seed}
+
+TOPIC SELECTION STRATEGY FOR THIS SESSION:
+{_random_exclusion_hint(seed)}"""
 
 
 def _validate_and_fix_blueprint(data: dict, resume_text: str) -> dict:
@@ -1813,7 +1854,7 @@ async def extract_interview_blueprint(
         client, provider, resolved_key, model,
         system=BLUEPRINT_SYSTEM,
         messages=[{"role": "user", "content": build_blueprint_prompt(resume_text)}],
-        temperature=0.05,
+        temperature=0.9,
         max_tokens=2048,
         label="blueprint",
     )

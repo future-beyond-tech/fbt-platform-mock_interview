@@ -131,7 +131,7 @@ export async function interviewTurn(sessionId, answer, provider, apiKey, model) 
   return res.json(); // { question, section, state }
 }
 
-export async function getInterviewReport(sessionId, provider, apiKey, model) {
+export async function getInterviewReport(sessionId, provider, apiKey, model, answers = []) {
   const res = await fetch(`${BASE}/api/interview/report`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -140,6 +140,7 @@ export async function getInterviewReport(sessionId, provider, apiKey, model) {
       provider: provider || 'gemini',
       api_key: apiKey || '',
       model: model || '',
+      answers,
     }),
   });
   if (!res.ok) {

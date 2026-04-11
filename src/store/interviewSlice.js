@@ -16,6 +16,11 @@ const interviewSlice = createSlice({
   reducers: {
     setBlueprint: (state, action) => {
       state.blueprint = action.payload;
+      state.questions = [];
+      state.answers = [];
+      state.report = null;
+      state.isComplete = false;
+      state.sessionEndTime = null;
       state.sessionStartTime = new Date().toISOString();
     },
 
