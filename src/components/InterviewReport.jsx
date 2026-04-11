@@ -28,6 +28,27 @@ function getStatusCls(score) {
   return 'focus';
 }
 
+function gapLinesFromAnswer(a) {
+  if (!a) return [];
+  if (Array.isArray(a.gaps) && a.gaps.length > 0) {
+    return a.gaps.map((s) => String(s).trim()).filter(Boolean).slice(0, 2);
+  }
+  const m = a.missing;
+  if (!m || m === 'None') return [];
+  if (m.includes(' · ')) {
+    return m.split(' · ').map((s) => s.trim()).filter(Boolean).slice(0, 2);
+  }
+  return [m];
+}
+
+function showStrengthLine(strength) {
+  if (!strength || typeof strength !== 'string') return false;
+  const t = strength.trim();
+  if (!t || t === 'Nothing significant') return false;
+  if (/^evaluation error/i.test(t)) return false;
+  return true;
+}
+
 export default function InterviewReport({ report, blueprint, onNewInterview }) {
   const [view, setView] = useState('summary');
   const answers = useSelector(selectAnswers);
@@ -102,7 +123,7 @@ export default function InterviewReport({ report, blueprint, onNewInterview }) {
                     Q{h.questionIndex || i + 1} {'\u00B7'} {(h.section || h.category || '').replace(/_/g, ' ')}
                   </div>
                   <p className="db-hl-quote">"{h.answer?.slice(0, 120)}{h.answer?.length > 120 ? '...' : ''}"</p>
-                  {h.strength && (
+                  {showStrengthLine(h.strength) && (
                     <p className="db-hl-why">{'\u2713'} {h.strength}</p>
                   )}
                 </div>
@@ -165,16 +186,22 @@ export default function InterviewReport({ report, blueprint, onNewInterview }) {
                             <span className="db-q-answer-label">Your answer</span>
                             <p>"{a.answer}"</p>
                           </div>
-                          {a.strength && (
+                          {showStrengthLine(a.strength) && (
                             <div className="db-q-covered">
-                              <span>{'\u2713'} Covered</span>
+                              <span>{'\u2713'}</span>
                               <p>{a.strength}</p>
                             </div>
                           )}
-                          {a.missing && a.missing !== 'None' && (
-                            <div className="db-q-missed">
-                              <span>{'\u2717'} Missed</span>
-                              <p>{a.missing}</p>
+                          {gapLinesFromAnswer(a).map((line, gi) => (
+                            <div key={gi} className="db-q-gap">
+                              <span>{'\u25CE'}</span>
+                              <p>{line}</p>
+                            </div>
+                          ))}
+                          {a.hint && String(a.hint).trim() && (
+                            <div className="db-q-redirect">
+                              <span>{'\u2192'}</span>
+                              <p>{a.hint}</p>
                             </div>
                           )}
                         </div>

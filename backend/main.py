@@ -34,7 +34,7 @@ if _BACKEND_ENV.exists():
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from questions import QUESTIONS, SESSIONS
 from providers import (
@@ -196,6 +196,7 @@ class EvalResult(BaseModel):
     verdict: str
     strength: str
     missing: str
+    gaps: list[str] = Field(default_factory=list)
     hint: str
     ideal: str
 
