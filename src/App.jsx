@@ -284,7 +284,8 @@ export default function App() {
       result = {
         score: 0,
         verdict: 'incorrect',
-        strength: 'Evaluation error — try again.',
+        strength: '',
+        gaps: [],
         missing: e.message.slice(0, 200),
         hint: '',
         ideal: '',

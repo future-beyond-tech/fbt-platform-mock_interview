@@ -4,6 +4,7 @@ import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
 import { Button, Alert, ProgressBar, Skeleton } from './ui';
 import RoboFetch from './RoboFetch';
+import FeedbackCard from './FeedbackCard';
 
 // Heavy visuals — only needed while recording (waveform) or after evaluation (score).
 // Splitting them keeps the initial SessionScreen bundle small.
@@ -276,40 +277,14 @@ export default function SessionScreen({
               <span className="score-bar-label">{result.score}/100</span>
             </div>
 
-            <div className="concept-grid">
-              {result.strength && result.strength !== 'Nothing significant' && (
-                <div className="concept-card covered">
-                  <span className="concept-icon">✓</span>
-                  <div>
-                    <span className="concept-label">What you covered</span>
-                    <p className="concept-text">{result.strength}</p>
-                  </div>
-                </div>
-              )}
-              {result.missing && result.missing !== 'None' && (
-                <div className="concept-card missing">
-                  <span className="concept-icon">✗</span>
-                  <div>
-                    <span className="concept-label">What was missing</span>
-                    <p className="concept-text">{result.missing}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {result.hint && (
-              <div className="hint-box">
-                <span className="hint-icon">💡</span>
-                <p>{result.hint}</p>
-              </div>
-            )}
-
-            <button className="ideal-btn" type="button" onClick={onToggleIdeal}>
-              {showIdeal ? 'Hide ideal answer ▲' : 'Show ideal answer ▼'}
-            </button>
-            {showIdeal && result.ideal && (
-              <div className="ideal-answer">{result.ideal}</div>
-            )}
+            <FeedbackCard
+              questionIndex={idx + 1}
+              sectionLabel={q?.s || 'Interview'}
+              score={result.score}
+              result={result}
+              showIdeal={showIdeal}
+              onToggleIdeal={onToggleIdeal}
+            />
           </div>
 
           <div className="answer-actions">

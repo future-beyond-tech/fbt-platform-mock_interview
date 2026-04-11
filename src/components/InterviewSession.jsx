@@ -4,6 +4,7 @@ import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
 import ScoreReveal from './ScoreReveal';
+import FeedbackCard from './FeedbackCard';
 import WaveformVisualizer from './WaveformVisualizer';
 import InterviewProgress from './InterviewProgress';
 import InterviewReport from './InterviewReport';
@@ -119,8 +120,9 @@ export default function InterviewSession({
       evalResult = {
         score: 0,
         verdict: 'incorrect',
-        strength: 'Evaluation error — try again.',
+        strength: '',
         missing: e.message?.slice(0, 200) || 'Unknown error',
+        gaps: [],
         hint: '',
         ideal: '',
       };
@@ -142,6 +144,7 @@ export default function InterviewSession({
       verdict: evalResult.verdict,
       strength: evalResult.strength,
       missing: evalResult.missing,
+      gaps: evalResult.gaps ?? [],
       hint: evalResult.hint,
       ideal: evalResult.ideal,
       category: currentCategory,
@@ -433,40 +436,14 @@ export default function InterviewSession({
               <span className="score-bar-label">{result.score}/100</span>
             </div>
 
-            <div className="concept-grid">
-              {result.strength && result.strength !== 'Nothing significant' && (
-                <div className="concept-card covered">
-                  <span className="concept-icon">✓</span>
-                  <div>
-                    <span className="concept-label">What you covered</span>
-                    <p className="concept-text">{result.strength}</p>
-                  </div>
-                </div>
-              )}
-              {result.missing && result.missing !== 'None' && (
-                <div className="concept-card missing">
-                  <span className="concept-icon">✗</span>
-                  <div>
-                    <span className="concept-label">What was missing</span>
-                    <p className="concept-text">{result.missing}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {result.hint && (
-              <div className="hint-box">
-                <span className="hint-icon">💡</span>
-                <p>{result.hint}</p>
-              </div>
-            )}
-
-            <button className="ideal-btn" type="button" onClick={() => setShowIdeal(v => !v)}>
-              {showIdeal ? 'Hide ideal answer ▲' : 'Show ideal answer ▼'}
-            </button>
-            {showIdeal && result.ideal && (
-              <div className="ideal-answer">{result.ideal}</div>
-            )}
+            <FeedbackCard
+              questionIndex={questionNumber}
+              sectionLabel={currentSection}
+              score={result.score}
+              result={result}
+              showIdeal={showIdeal}
+              onToggleIdeal={() => setShowIdeal((v) => !v)}
+            />
           </div>
 
           {error && <div className="inline-error">{error}</div>}
