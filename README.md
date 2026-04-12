@@ -11,6 +11,8 @@ React (Vite)  ──▶  FastAPI  ──▶  Ollama / Groq / Gemini / OpenAI / A
   :5173            :8000          (your choice)
 ```
 
+For a full breakdown of folders, routers, and data flow, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
 ## Quick Start
 
 ### 1. Start the backend
