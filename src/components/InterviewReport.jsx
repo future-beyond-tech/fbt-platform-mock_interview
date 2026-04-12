@@ -1,11 +1,6 @@
 import { useState } from 'react';
 import { useSelector } from 'react-redux';
-import {
-  selectAnswers,
-  selectOverallScore,
-  selectCategoryScores,
-  selectSessionDuration,
-} from '../store/interviewSelectors';
+import { selectAnswers as selectReduxAnswers, selectSessionDuration } from '../store/interviewSelectors';
 
 function getTagline(score) {
   if (score >= 85) return "You're interview ready.";
@@ -26,6 +21,29 @@ function getStatusCls(score) {
   if (score >= 60) return 'good';
   if (score >= 40) return 'needs';
   return 'focus';
+}
+
+function buildCategoryScores(answers) {
+  const categories = {};
+
+  answers.forEach((answer) => {
+    const category = answer.category || 'general';
+    if (!categories[category]) categories[category] = { total: 0, count: 0 };
+    categories[category].total += answer.score ?? 0;
+    categories[category].count += 1;
+  });
+
+  return Object.entries(categories).map(([name, data]) => ({
+    name,
+    score: Math.round(data.total / data.count),
+    count: data.count,
+  }));
+}
+
+function getAverageScore(answers) {
+  if (!answers.length) return 0;
+  const total = answers.reduce((sum, answer) => sum + (answer.score ?? 0), 0);
+  return Math.round(total / answers.length);
 }
 
 function gapLinesFromAnswer(a) {
@@ -49,17 +67,17 @@ function showStrengthLine(strength) {
   return true;
 }
 
-export default function InterviewReport({ report, blueprint, onNewInterview }) {
+export default function InterviewReport({ report, blueprint, answers: persistedAnswers = [], onNewInterview }) {
   const [view, setView] = useState('summary');
-  const answers = useSelector(selectAnswers);
-  const overallScore = useSelector(selectOverallScore);
-  const categoryScores = useSelector(selectCategoryScores);
+  const reduxAnswers = useSelector(selectReduxAnswers);
   const duration = useSelector(selectSessionDuration);
+  const answers = persistedAnswers.length > 0 ? persistedAnswers : reduxAnswers;
+  const categoryScores = buildCategoryScores(answers);
   const [expandedQ, setExpandedQ] = useState({});
 
   if (!report) return null;
 
-  const score = report.overall_score ?? overallScore;
+  const score = report.overall_score ?? getAverageScore(answers);
   const name = blueprint?.candidate_name || 'Candidate';
   const domain = blueprint?.primary_domain || '';
   const answeredCount = answers.length;

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch } from 'react-redux';
 import { useVoice } from '../hooks/useVoice';
 import { useTypewriter } from '../hooks/useTypewriter';
 import Avatar from './Avatar';
@@ -14,7 +14,6 @@ import {
   addQuestion,
   setReport as dispatchReport,
 } from '../store/interviewSlice';
-import { selectAnswers as selectReduxAnswers } from '../store/interviewSelectors';
 
 function appendTranscript(currentText, incomingText) {
   if (!incomingText) return currentText;
@@ -51,8 +50,8 @@ export default function InterviewSession({
   const [error, setError] = useState('');
   const [loadingNext, setLoadingNext] = useState(false);
   const [report, setReport] = useState(null);
+  const [reportAnswers, setReportAnswers] = useState([]);
   const dispatch = useDispatch();
-  const reduxAnswers = useSelector(selectReduxAnswers);
   const [loadingReport, setLoadingReport] = useState(false);
   const [history, setHistory] = useState([
     { role: 'assistant', section: initialSection || 'Introduction', category: initialCategory || 'intro', text: initialQuestion },
@@ -248,9 +247,9 @@ export default function InterviewSession({
         settings.provider,
         settings.apiKey,
         settings.model,
-        reduxAnswers,
       );
       setReport(data.report);
+      setReportAnswers(data.answers || []);
       dispatch(dispatchReport(data.report));
     } catch (e) {
       setError(e.message || 'Failed to generate report.');
@@ -315,6 +314,7 @@ export default function InterviewSession({
           <InterviewReport
             report={report}
             blueprint={initialBlueprint}
+            answers={reportAnswers}
             onNewInterview={() => void handleGoStart()}
           />
         )}

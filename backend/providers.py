@@ -1,118 +1,42 @@
 """
 Multi-provider LLM abstraction.
 Supports: Ollama (local), Groq, Google Gemini, OpenAI, Anthropic.
+
+Phase 2 note: retry/circuit-breaker logic has been extracted to
+shared/llm/resilience.py and adapter classes live in shared/llm/adapters/.
+This file now imports those and delegates _call_chat_text through the registry.
+All existing public function signatures are unchanged.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import re
 import sys
 from datetime import datetime
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import httpx
+
+from config import get_config_value
+
+# ── Phase 2: import resilience primitives from shared module ──────────────────
+from shared.llm.resilience import (
+    RETRY_STATUSES,
+    OVERLOAD_COOLDOWN_SECONDS,
+    _provider_cooldown,
+    _retry_with_backoff,
+    _provider_sick,
+    _mark_provider_sick,
+)
+# ── Phase 2: import registry so _call_chat_text can delegate to adapters ─────
+from shared.llm.registry import get_provider as _get_llm_provider
 
 
 def _log(*args, **kwargs):
     """Print with an ISO timestamp prefix. Preserves the caller's stream."""
     ts = datetime.now().isoformat(timespec="seconds")
     print(f"[{ts}]", *args, **kwargs)
-
-# ─── Retry + provider fallback ────────────────────────────
-# Transient HTTP statuses worth retrying. 503 is the Google AI Studio
-# "high demand" overload code; 529 is Anthropic's overload; 500/502/504 are
-# generic transient gateway errors.
-RETRY_STATUSES: set[int] = {429, 500, 502, 503, 504, 529}
-
-# Provider circuit-breaker: when a provider returns an overload status, mark
-# it "sick" for COOLDOWN_SECONDS. Subsequent calls within that window short-
-# circuit their retry chain and raise immediately so the fallback path runs
-# without waiting. This prevents the "two back-to-back LLM calls each pay
-# the full Gemini retry cost" problem on endpoints like /interview/start.
-OVERLOAD_COOLDOWN_SECONDS: float = 60.0
-_provider_cooldown: dict[str, float] = {}
-
-
-def _provider_sick(provider: str) -> bool:
-    deadline = _provider_cooldown.get(provider)
-    if deadline is None:
-        return False
-    if asyncio.get_event_loop().time() >= deadline:
-        _provider_cooldown.pop(provider, None)
-        return False
-    return True
-
-
-def _mark_provider_sick(provider: str) -> None:
-    _provider_cooldown[provider] = asyncio.get_event_loop().time() + OVERLOAD_COOLDOWN_SECONDS
-    _log(
-        f"[circuit-breaker] {provider} marked sick for {OVERLOAD_COOLDOWN_SECONDS:.0f}s; "
-        f"next calls will skip straight to fallback",
-        file=sys.stderr,
-    )
-
-
-async def _retry_with_backoff(
-    fn: Callable[[], Awaitable[Any]],
-    *,
-    max_attempts: int = 2,
-    base_delay: float = 0.3,
-    max_delay: float = 2.0,
-    label: str = "call",
-    provider: str | None = None,
-) -> Any:
-    """Run `fn`, retrying on transient HTTP errors with exponential backoff.
-
-    If `provider` is given and is currently under overload cooldown, raise
-    immediately so the caller can fall back without paying the retry cost.
-    """
-    if provider and _provider_sick(provider):
-        _log(
-            f"[retry:{label}] skipping — {provider} is under overload cooldown",
-            file=sys.stderr,
-        )
-        # Raise a synthetic 503 so the fallback branch in the caller runs.
-        raise httpx.HTTPStatusError(
-            f"{provider} under overload cooldown",
-            request=httpx.Request("POST", "https://cooldown.local"),
-            response=httpx.Response(503),
-        )
-
-    last_error: Exception | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return await fn()
-        except httpx.HTTPStatusError as error:
-            last_error = error
-            status = error.response.status_code if error.response is not None else 0
-            if status not in RETRY_STATUSES or attempt == max_attempts:
-                if status in RETRY_STATUSES and provider:
-                    _mark_provider_sick(provider)
-                raise
-            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-            _log(
-                f"[retry:{label}] attempt {attempt}/{max_attempts} failed with HTTP {status}; "
-                f"sleeping {delay:.1f}s",
-                file=sys.stderr,
-            )
-            await asyncio.sleep(delay)
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as error:
-            last_error = error
-            if attempt == max_attempts:
-                raise
-            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-            _log(
-                f"[retry:{label}] attempt {attempt}/{max_attempts} network error: {error}; "
-                f"sleeping {delay:.1f}s",
-                file=sys.stderr,
-            )
-            await asyncio.sleep(delay)
-    if last_error:
-        raise last_error
-    raise RuntimeError("retry_with_backoff exhausted with no error captured")
 
 ENV_KEY_NAMES = {
     "gemini": "GEMINI_API_KEY",
@@ -147,7 +71,7 @@ def resolve_api_key(provider: str, api_key: str) -> str:
         return api_key.strip()
 
     env_name = ENV_KEY_NAMES[provider]
-    env_value = os.environ.get(env_name, "").strip()
+    env_value = get_config_value(env_name, "").strip()
     if env_value:
         return env_value
 
@@ -1151,80 +1075,27 @@ async def _call_chat_text(
     temperature: float = 0.7,
     max_tokens: int = 1024,
 ) -> str:
-    """Generic single-turn chat completion that returns plain text.
+    """Generic single-turn or multi-turn chat completion → plain text.
 
-    `messages` is a list of {"role": "user"|"assistant", "content": str} entries.
+    Phase 2: delegates to the per-provider adapter in shared/llm/registry.
+    All call sites remain identical — only the implementation moves.
     """
-    if provider == "ollama":
-        # Stitch a single prompt for Ollama's /api/generate
-        history = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
-        full = f"{system}\n\n{history}\nASSISTANT:"
-        r = await client.post(
-            "http://localhost:11434/api/generate",
-            json={"model": model or "llama3:latest", "prompt": full, "stream": False,
-                  "options": {"temperature": temperature, "num_predict": max_tokens}},
-        )
-        r.raise_for_status()
-        return (r.json().get("response") or "").strip()
+    try:
+        adapter = _get_llm_provider(provider)
+    except ValueError:
+        raise ClientInputError(f"Unknown provider: {provider}")
 
-    if provider == "gemini":
-        model_name = model or "gemini-2.5-flash"
-        is_gemma = model_name.startswith("gemma")
-        # Gemma rejects systemInstruction; bake it into the first user message instead.
-        contents = []
-        if is_gemma:
-            stitched = system + "\n\n" + (messages[0]["content"] if messages else "")
-            contents.append({"role": "user", "parts": [{"text": stitched}]})
-            tail = messages[1:]
-        else:
-            tail = messages
-        for m in tail:
-            role = "user" if m["role"] == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": m["content"]}]})
-        body: dict = {
-            "contents": contents,
-            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
-        }
-        if not is_gemma:
-            body["systemInstruction"] = {"parts": [{"text": system}]}
-        r = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-            params={"key": api_key},
-            json=body,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if "error" in data:
-            raise ProviderResponseError(f"Gemini API error: {data['error'].get('message', data['error'])}")
-        candidates = data.get("candidates", [])
-        if not candidates:
-            raise ProviderResponseError("Gemini returned no candidates")
-        parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts if p.get("text")).strip()
-
-    if provider in ("groq", "openai"):
-        url = ("https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
-               else "https://api.openai.com/v1/chat/completions")
-        mdl = model or ("llama-3.3-70b-versatile" if provider == "groq" else "gpt-4o-mini")
-        chat_messages = [{"role": "system", "content": system}] + messages
-        r = await client.post(url, headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": mdl, "temperature": temperature, "max_tokens": max_tokens,
-                  "messages": chat_messages})
-        r.raise_for_status()
-        return (r.json()["choices"][0]["message"]["content"] or "").strip()
-
-    if provider == "anthropic":
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": model or "claude-sonnet-4-20250514", "max_tokens": max_tokens,
-                  "system": system, "messages": messages},
-        )
-        r.raise_for_status()
-        data = r.json()
-        return "".join(c["text"] for c in data["content"] if c["type"] == "text").strip()
-
-    raise ClientInputError(f"Unknown provider: {provider}")
+    # Adapters accept `api_key` as an extra kwarg so the per-call key
+    # (user-supplied or resolved by resolve_api_key) overrides the env default.
+    return await adapter.chat(
+        client,
+        system,
+        messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        api_key=api_key,
+    )
 
 
 # ─── Chat-text fallback chain ─────────────────────────────
