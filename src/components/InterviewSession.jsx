@@ -302,9 +302,22 @@ export default function InterviewSession({
         </div>
 
         {loadingReport && (
-          <div className="loading" style={{ padding: '48px 0' }}>
-            <div className="think-dots"><span /><span /><span /></div>
-            <p>Generating your interview report...</p>
+          <div className="db-report-skeleton" aria-busy="true" aria-label="Generating interview report">
+            <div className="db-report-skel-hero">
+              <div className="db-report-skel-ring" />
+              <div className="db-report-skel-lines">
+                <div className="db-report-skel-bar db-report-skel-bar--lg" />
+                <div className="db-report-skel-bar db-report-skel-bar--md" />
+                <div className="db-report-skel-bar db-report-skel-bar--sm" />
+              </div>
+            </div>
+            <div className="db-report-skel-cards">
+              <div className="db-report-skel-card" />
+              <div className="db-report-skel-card" />
+              <div className="db-report-skel-card" />
+            </div>
+            <div className="db-report-skel-block" />
+            <p className="db-report-skel-caption">Generating your interview report…</p>
           </div>
         )}
 

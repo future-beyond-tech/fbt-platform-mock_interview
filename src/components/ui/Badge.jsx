@@ -2,6 +2,8 @@
  * Badge — compact status pill.
  * tone: 'default' | 'accent' | 'success' | 'warning' | 'danger' | 'info'
  */
+import './ui.css';
+
 export default function Badge({ tone = 'default', className = '', children, ...rest }) {
   const classes = [
     't-badge',
