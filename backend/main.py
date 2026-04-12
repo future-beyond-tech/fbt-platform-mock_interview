@@ -46,6 +46,8 @@ from providers import (
     extract_interview_blueprint,
     extract_insights_from_answer,
     extract_profile_from_resume,
+    evaluate_followup_with_provider,
+    generate_followup_question_with_provider,
     generate_question_from_file,
     generate_questions_with_provider,
     generate_session_report,
@@ -201,6 +203,37 @@ class EvalResult(BaseModel):
     ideal: str
 
 
+class GenerateFollowUpRequest(BaseModel):
+    original_question: str
+    user_answer: str
+    topic: str = ""
+    provider: str = "groq"
+    api_key: str = ""
+    model: str = ""
+    profile: dict | None = None
+    interview_session_id: str = ""
+
+
+class GenerateFollowUpResponse(BaseModel):
+    follow_up_question: str
+
+
+class EvaluateFollowUpRequest(BaseModel):
+    original_question: str
+    follow_up_question: str
+    answer: str
+    provider: str = "groq"
+    api_key: str = ""
+    model: str = ""
+    profile: dict | None = None
+    interview_session_id: str = ""
+
+
+class EvaluateFollowUpResponse(BaseModel):
+    clarified: bool
+    feedback: str
+
+
 class ProviderInfo(BaseModel):
     id: str
     name: str
@@ -334,6 +367,96 @@ async def evaluate(req: EvalRequest):
         raise HTTPException(status_code=422, detail="LLM returned unparseable response")
 
     return result
+
+
+@app.post("/api/generate-followup", response_model=GenerateFollowUpResponse)
+async def generate_followup(req: GenerateFollowUpRequest):
+    """Generate one probing follow-up question for a partial answer."""
+    oq = (req.original_question or "").strip()
+    ua = (req.user_answer or "").strip()
+    if not oq:
+        raise HTTPException(status_code=400, detail="original_question is required")
+    if not ua:
+        raise HTTPException(status_code=400, detail="user_answer is required")
+
+    profile: dict | None = req.profile
+    if req.interview_session_id:
+        sess = INTERVIEW_SESSIONS.get(req.interview_session_id)
+        if sess and sess.get("profile"):
+            profile = sess["profile"]
+
+    try:
+        text = await generate_followup_question_with_provider(
+            client=http_client,
+            provider=req.provider,
+            api_key=req.api_key,
+            model=req.model,
+            original_question=oq,
+            user_answer=ua,
+            topic=req.topic.strip(),
+            profile=profile,
+        )
+    except ClientInputError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except ProviderResponseError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot reach the provider. Is Ollama running?" if req.provider == "ollama"
+            else "Cannot reach the provider API.",
+        )
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {_http_error_detail(error)}")
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {str(error)}")
+
+    return GenerateFollowUpResponse(follow_up_question=text)
+
+
+@app.post("/api/evaluate-followup", response_model=EvaluateFollowUpResponse)
+async def evaluate_followup(req: EvaluateFollowUpRequest):
+    """Evaluate whether a follow-up answer clarifies understanding."""
+    if not (req.answer or "").strip():
+        raise HTTPException(status_code=400, detail="answer is required")
+    fq = (req.follow_up_question or "").strip()
+    oq = (req.original_question or "").strip()
+    if not fq or not oq:
+        raise HTTPException(status_code=400, detail="original_question and follow_up_question are required")
+
+    profile: dict | None = req.profile
+    if req.interview_session_id:
+        sess = INTERVIEW_SESSIONS.get(req.interview_session_id)
+        if sess and sess.get("profile"):
+            profile = sess["profile"]
+
+    try:
+        out = await evaluate_followup_with_provider(
+            client=http_client,
+            provider=req.provider,
+            api_key=req.api_key,
+            model=req.model,
+            original_question=oq,
+            follow_up_question=fq,
+            answer=req.answer.strip(),
+            profile=profile,
+        )
+    except ClientInputError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except ProviderResponseError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot reach the provider. Is Ollama running?" if req.provider == "ollama"
+            else "Cannot reach the provider API.",
+        )
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {_http_error_detail(error)}")
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {str(error)}")
+
+    return EvaluateFollowUpResponse(clarified=bool(out.get("clarified")), feedback=out.get("feedback") or "")
 
 
 @app.post("/api/generate-questions")
@@ -471,12 +594,25 @@ async def generate_from_file(
 import uuid
 
 INTERVIEW_SESSIONS: dict[str, dict] = {}
-TOTAL_QUESTIONS = 12
+# 12 structured blueprint questions + up to 2 extra probing questions (tier 1–3 partials).
+BLUEPRINT_QUESTION_COUNT = 12
+MAX_SESSION_QUESTIONS = 14
 
 
 class InterviewTurnRequest(BaseModel):
     session_id: str
     answer: str
+    provider: str = "gemini"
+    api_key: str = ""
+    model: str = ""
+
+
+class EnqueueProbeRequest(BaseModel):
+    """Queue a probing question (same style as a normal tier question) after a partial tier answer."""
+    session_id: str
+    original_question: str
+    user_answer: str
+    category: str  # tier_1 | tier_2 | tier_3
     provider: str = "gemini"
     api_key: str = ""
     model: str = ""
@@ -576,13 +712,17 @@ async def interview_start(
     session_state = {
         "questionCount": 1,
         "currentQuestionNumber": 1,
-        "totalQuestions": TOTAL_QUESTIONS,
+        "totalQuestions": MAX_SESSION_QUESTIONS,
         "questionsAsked": [q1["question"]],
         "askedTopics": [q1["topic"]],
         "askedProjects": [],
         "tierCounters": {"tier_1": 0, "tier_2": 0, "tier_3": 0},
         "answers": [],
         "completed": False,
+        "next_blueprint_qnum": 2,
+        "dynamic_queue": [],
+        "dynamic_slots_used": 0,
+        "current_question_category": q1["category"],
     }
 
     session_id = uuid.uuid4().hex
@@ -602,7 +742,7 @@ async def interview_start(
         "category": q1["category"],
         "section": CATEGORY_LABELS.get(q1["category"], "Introduction"),
         "question_number": 1,
-        "total_questions": TOTAL_QUESTIONS,
+        "total_questions": MAX_SESSION_QUESTIONS,
         "what_to_evaluate": q1["what_to_evaluate"],
         "state": session_state,
         "profile": profile,
@@ -618,9 +758,75 @@ async def interview_start(
     }
 
 
+@app.post("/api/interview/enqueue-probe")
+async def interview_enqueue_probe(req: EnqueueProbeRequest):
+    """Queue one extra probing question (max 2 per session); only tier_1–tier_3 categories."""
+    session = INTERVIEW_SESSIONS.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found or expired.")
+
+    cat = (req.category or "").strip()
+    if cat not in ("tier_1", "tier_2", "tier_3"):
+        raise HTTPException(status_code=400, detail="Probing questions apply only to tier 1, 2, or 3.")
+
+    state = session["state"]
+    if state.get("dynamic_slots_used", 0) >= 2:
+        raise HTTPException(status_code=400, detail="Maximum extra questions for this session reached.")
+
+    oq = (req.original_question or "").strip()
+    ua = (req.user_answer or "").strip()
+    if not oq or not ua:
+        raise HTTPException(status_code=400, detail="original_question and user_answer are required.")
+
+    provider = req.provider or session["provider"]
+    model = req.model or session["model"]
+
+    try:
+        text = await generate_followup_question_with_provider(
+            client=http_client,
+            provider=provider,
+            api_key=req.api_key,
+            model=model,
+            original_question=oq,
+            user_answer=ua,
+            topic=cat,
+            profile=session.get("profile"),
+        )
+    except ClientInputError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except ProviderResponseError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="Cannot reach the provider. Is Ollama running?" if provider == "ollama"
+            else "Cannot reach the provider API.",
+        )
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {_http_error_detail(error)}")
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Provider error: {str(error)}")
+
+    q_item = {
+        "question": text,
+        "topic": cat,
+        "category": cat,
+        "what_to_evaluate": "Clarifies a specific claim or example from the candidate's previous answer.",
+        "difficulty": "medium",
+    }
+    state.setdefault("dynamic_queue", []).append(q_item)
+    state["dynamic_slots_used"] = state.get("dynamic_slots_used", 0) + 1
+
+    return {
+        "queued": True,
+        "dynamic_slots_used": state["dynamic_slots_used"],
+        "state": state,
+    }
+
+
 @app.post("/api/interview/turn")
 async def interview_turn(req: InterviewTurnRequest):
-    """Submit answer to current Q, score it, return the next question."""
+    """Submit answer to current Q, return the next question (blueprint or queued probe)."""
     session = INTERVIEW_SESSIONS.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Interview session not found or expired.")
@@ -631,38 +837,75 @@ async def interview_turn(req: InterviewTurnRequest):
 
     state = session["state"]
     blueprint = session["blueprint"]
-    profile = session.get("profile")
     provider = req.provider or session["provider"]
     model = req.model or session["model"]
     current_q_num = state["currentQuestionNumber"]
 
-    # Record this answer.
+    # Record this answer (question being answered was the last one shown).
     last_q = state["questionsAsked"][-1] if state["questionsAsked"] else ""
+    answered_category = state.get("current_question_category", "")
     state["answers"].append({
         "question": last_q,
         "answer": answer,
-        "category": "",  # will be enriched below
+        "category": answered_category,
         "score": None,
         "feedback": "",
     })
 
-    # Generate the NEXT question.
-    next_q_num = current_q_num + 1
+    ladder = session.get("ladder")
+    next_display_num = current_q_num + 1
+    dq = state.get("dynamic_queue") or []
 
-    if next_q_num > TOTAL_QUESTIONS:
+    # Serve a queued probing question next (same UI as any other question).
+    if dq:
+        q_item = dq.pop(0)
+        state["dynamic_queue"] = dq
+        state["currentQuestionNumber"] = next_display_num
+        state["questionCount"] = next_display_num
+        state["questionsAsked"].append(q_item["question"])
+        state["askedTopics"].append(q_item.get("topic", ""))
+        cat = q_item.get("category", "tier_1")
+        state["current_question_category"] = cat
+        section = CATEGORY_LABELS.get(cat, cat.replace("_", " ").title())
+        return {
+            "question": q_item["question"],
+            "category": cat,
+            "section": section,
+            "question_number": next_display_num,
+            "total_questions": MAX_SESSION_QUESTIONS,
+            "what_to_evaluate": q_item.get("what_to_evaluate", ""),
+            "difficulty": q_item.get("difficulty", "medium"),
+            "state": state,
+            "completed": False,
+        }
+
+    nb = state.get("next_blueprint_qnum", 2)
+
+    if nb > BLUEPRINT_QUESTION_COUNT:
         state["completed"] = True
         return {
             "question": None,
             "category": "completed",
             "section": "Completed",
-            "question_number": next_q_num,
-            "total_questions": TOTAL_QUESTIONS,
+            "question_number": next_display_num,
+            "total_questions": MAX_SESSION_QUESTIONS,
             "what_to_evaluate": "",
             "state": state,
             "completed": True,
         }
 
-    ladder = session.get("ladder")
+    if next_display_num > MAX_SESSION_QUESTIONS:
+        state["completed"] = True
+        return {
+            "question": None,
+            "category": "completed",
+            "section": "Completed",
+            "question_number": next_display_num,
+            "total_questions": MAX_SESSION_QUESTIONS,
+            "what_to_evaluate": "",
+            "state": state,
+            "completed": True,
+        }
 
     try:
         q_data = await generate_structured_question(
@@ -671,8 +914,8 @@ async def interview_turn(req: InterviewTurnRequest):
             api_key=req.api_key,
             model=model,
             blueprint=blueprint,
-            question_number=next_q_num,
-            total_questions=TOTAL_QUESTIONS,
+            question_number=nb,
+            total_questions=BLUEPRINT_QUESTION_COUNT,
             session_state=state,
             ladder=ladder,
         )
@@ -685,24 +928,25 @@ async def interview_turn(req: InterviewTurnRequest):
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"Question generation failed: {str(error)}")
 
-    state["currentQuestionNumber"] = next_q_num
-    state["questionCount"] = next_q_num
+    state["next_blueprint_qnum"] = nb + 1
+    state["currentQuestionNumber"] = next_display_num
+    state["questionCount"] = next_display_num
     state["questionsAsked"].append(q_data["question"])
     state["askedTopics"].append(q_data.get("topic", ""))
 
-    # Track project names if project-based.
     if q_data.get("category") == "project_based" and q_data.get("topic"):
         state["askedProjects"].append(q_data["topic"])
 
     category = q_data.get("category", "domain_concept")
+    state["current_question_category"] = category
     section = CATEGORY_LABELS.get(category, category.replace("_", " ").title())
 
     return {
         "question": q_data["question"],
         "category": category,
         "section": section,
-        "question_number": next_q_num,
-        "total_questions": TOTAL_QUESTIONS,
+        "question_number": next_display_num,
+        "total_questions": MAX_SESSION_QUESTIONS,
         "what_to_evaluate": q_data.get("what_to_evaluate", ""),
         "difficulty": q_data.get("difficulty", "medium"),
         "state": state,

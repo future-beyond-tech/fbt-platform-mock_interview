@@ -39,6 +39,70 @@ export async function evaluateAnswer(questionId, answer, provider, apiKey, model
   return res.json();
 }
 
+export async function generateFollowUp(originalQuestion, userAnswer, provider, apiKey, model, opts = {}) {
+  const res = await fetch(`${BASE}/api/generate-followup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      original_question: originalQuestion,
+      user_answer: userAnswer,
+      topic: opts.topic || '',
+      provider: provider || 'groq',
+      api_key: apiKey || '',
+      model: model || '',
+      profile: opts.profile || null,
+      interview_session_id: opts.interviewSessionId || '',
+    }),
+  });
+  if (!res.ok) {
+    let detail;
+    try {
+      const d = await res.json();
+      detail = d.detail;
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || `Follow-up generation failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function evaluateFollowUp(
+  originalQuestion,
+  followUpQuestion,
+  answer,
+  provider,
+  apiKey,
+  model,
+  opts = {},
+) {
+  const res = await fetch(`${BASE}/api/evaluate-followup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      original_question: originalQuestion,
+      follow_up_question: followUpQuestion,
+      answer,
+      provider: provider || 'groq',
+      api_key: apiKey || '',
+      model: model || '',
+      profile: opts.profile || null,
+      interview_session_id: opts.interviewSessionId || '',
+    }),
+  });
+  if (!res.ok) {
+    let detail;
+    try {
+      const d = await res.json();
+      detail = d.detail;
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || `Follow-up evaluation failed (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function generateQuestions(provider, apiKey, model, topic = '', count = 3) {
   const res = await fetch(`${BASE}/api/generate-questions`, {
     method: 'POST',
@@ -109,6 +173,41 @@ export async function startInterview(file, provider, apiKey, model) {
     throw new Error(detail || `Interview start failed (${res.status})`);
   }
   return res.json(); // { session_id, question, section, state }
+}
+
+export async function enqueueInterviewProbe(
+  sessionId,
+  originalQuestion,
+  userAnswer,
+  category,
+  provider,
+  apiKey,
+  model,
+) {
+  const res = await fetch(`${BASE}/api/interview/enqueue-probe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      original_question: originalQuestion,
+      user_answer: userAnswer,
+      category,
+      provider: provider || 'gemini',
+      api_key: apiKey || '',
+      model: model || '',
+    }),
+  });
+  if (!res.ok) {
+    let detail;
+    try {
+      const d = await res.json();
+      detail = d.detail;
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || `Enqueue failed (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function interviewTurn(sessionId, answer, provider, apiKey, model) {

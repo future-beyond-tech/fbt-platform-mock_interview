@@ -12,6 +12,8 @@ const Q_LABELS = [
   { short: 'T3', label: 'Tier 3' },         // Q10
   { short: 'T3', label: 'Tier 3' },         // Q11
   { short: 'W',  label: 'Wrap' },           // Q12
+  { short: '+',  label: 'More' },           // Q13 — optional extra (tier probe)
+  { short: '+',  label: 'More' },           // Q14 — optional extra (tier probe)
 ];
 
 const TIER_COLORS = {

@@ -8,8 +8,12 @@ import FeedbackCard from './FeedbackCard';
 import WaveformVisualizer from './WaveformVisualizer';
 import InterviewProgress from './InterviewProgress';
 import InterviewReport from './InterviewReport';
-import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport } from '../api';
-import { submitAnswer as dispatchAnswer, addQuestion, setReport as dispatchReport } from '../store/interviewSlice';
+import { interviewTurn, evaluateAnswer, endInterview, getInterviewReport, enqueueInterviewProbe } from '../api';
+import {
+  submitAnswer as dispatchAnswer,
+  addQuestion,
+  setReport as dispatchReport,
+} from '../store/interviewSlice';
 import { selectAnswers as selectReduxAnswers } from '../store/interviewSelectors';
 
 function appendTranscript(currentText, incomingText) {
@@ -66,9 +70,12 @@ export default function InterviewSession({
     setDraftAnswer(resolved);
   }, []);
 
-  const handleTranscript = useCallback((text) => {
-    updateDraft(current => appendTranscript(current, text));
-  }, [updateDraft]);
+  const handleTranscript = useCallback(
+    (text) => {
+      updateDraft((current) => appendTranscript(current, text));
+    },
+    [updateDraft],
+  );
 
   const {
     isRecording, isTranscribing, hasMic, label,
@@ -150,6 +157,28 @@ export default function InterviewSession({
       category: currentCategory,
       section: currentSection,
     }));
+
+    // Tier 1–3 only: must finish enqueueing the probe BEFORE showing the result screen so "Next"
+    // cannot call interview_turn while dynamic_queue is still empty (otherwise the blueprint advances first).
+    const sc = evalResult.score;
+    const tierOk = ['tier_1', 'tier_2', 'tier_3'].includes(currentCategory);
+    const slotsUsed = interviewState?.dynamic_slots_used ?? 0;
+    if (sc >= 41 && sc <= 70 && tierOk && slotsUsed < 2) {
+      try {
+        const probeData = await enqueueInterviewProbe(
+          sessionId,
+          currentQuestion,
+          text,
+          currentCategory,
+          settings.provider,
+          settings.apiKey,
+          settings.model,
+        );
+        if (probeData?.state) setInterviewState(probeData.state);
+      } catch {
+        // Non-fatal: user proceeds without a queued probe for this turn.
+      }
+    }
 
     setResult(evalResult);
     setPhase('result');

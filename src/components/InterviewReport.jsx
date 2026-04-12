@@ -63,7 +63,7 @@ export default function InterviewReport({ report, blueprint, onNewInterview }) {
   const name = blueprint?.candidate_name || 'Candidate';
   const domain = blueprint?.primary_domain || '';
   const answeredCount = answers.length;
-  const totalQ = 12;
+  const totalQ = 14; // 12 blueprint + up to 2 extra tier probes
 
   // Find strongest & weakest categories.
   const sorted = [...categoryScores].sort((a, b) => b.score - a.score);

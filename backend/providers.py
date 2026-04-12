@@ -552,6 +552,183 @@ async def evaluate_with_provider(
         raise primary_error
 
 
+# ─── Follow-up question (partial answers) ─────────────────
+
+FOLLOWUP_GEN_SYSTEM = (
+    "You are a senior interviewer. Your job is to ask ONE short spoken question that pins down "
+    "something unclear in the candidate's own words—not a new textbook question on the topic. "
+    "Output only that question: one line, no preamble, no label like 'Follow-up:', no numbering, no quotes around the whole line."
+)
+
+FOLLOWUP_EVAL_SYSTEM = (
+    "You judge whether a candidate's follow-up answer shows they understood the concept. "
+    "Respond with ONLY valid JSON, no markdown."
+)
+
+_TIER_CONTEXT_LABELS = {
+    "tier_1": "Tier 1 · Foundations",
+    "tier_2": "Tier 2 · Advanced",
+    "tier_3": "Tier 3 · Expert",
+}
+
+
+def _tier_context_line(topic: str) -> str:
+    t = (topic or "").strip()
+    if not t:
+        return ""
+    label = _TIER_CONTEXT_LABELS.get(t, t.replace("_", " "))
+    return (
+        f"Depth band (terminology/tone only — do NOT ask a generic question on this band; anchor on their answer): {label}\n"
+    )
+
+
+def _profile_context_line(profile: dict | None) -> str:
+    if not profile:
+        return ""
+    domain = str(profile.get("domain") or "").strip()
+    if not domain:
+        return ""
+    return f"Domain (appropriate vocabulary only — still anchor the question on their words): {domain}\n"
+
+
+def build_followup_generate_prompt(
+    original_question: str,
+    user_answer: str,
+    topic: str,
+    profile: dict | None = None,
+) -> str:
+    tier_line = _tier_context_line(topic)
+    profile_line = _profile_context_line(profile)
+    ua = (user_answer or "").strip()
+    if not ua:
+        return f"""Original Question: {original_question}
+
+The candidate gave no substantive answer.
+
+Ask ONE concise question that invites them to answer the original question with one concrete example.
+Return ONLY the question text, nothing else."""
+
+    return f"""Original interview question:
+{original_question}
+
+{tier_line}{profile_line}Candidate's answer (this is the primary text to analyze — quote or paraphrase from here):
+{user_answer}
+
+Instructions:
+1. Internally, identify ONE phrase, claim, example, or step in their answer that is vague, under-specified, hand-wavy, or needs justification (e.g. undefined term, missing mechanism, unclear "how/why").
+2. Output exactly ONE spoken question that targets THAT fragment — e.g. "You mentioned ___ — can you walk through how that works in your case?" or "When you said ___, what did you mean by ___?"
+3. Do NOT ask a fresh definition question about the topic if their answer already names the topic — drill into what THEY said.
+4. Do NOT repeat the original question verbatim.
+5. Keep it answerable in about 30–60 seconds verbally.
+
+Return ONLY the question text, nothing else."""
+
+
+def _strip_followup_question(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r'^["\']|["\']$', "", t.strip())
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    return lines[0][:500]
+
+
+def build_followup_eval_prompt(original_question: str, follow_up_question: str, answer: str) -> str:
+    return f"""Original interview question: {original_question}
+
+Follow-up question asked: {follow_up_question}
+
+Candidate's follow-up answer: {answer}
+
+Did the candidate demonstrate clear understanding in this follow-up (substantive, correct, on-topic)?
+
+Respond with ONLY a raw JSON object — no markdown, no backticks:
+{{"clarified": true or false, "feedback": "<one short sentence>"}}"""
+
+
+def parse_followup_eval_json(text: str) -> dict | None:
+    if not text or not text.strip():
+        return None
+    cleaned = re.sub(r"```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if "clarified" not in data:
+        return None
+    clarified = bool(data.get("clarified"))
+    feedback = str(data.get("feedback", ""))[:300]
+    return {"clarified": clarified, "feedback": feedback}
+
+
+async def generate_followup_question_with_provider(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    original_question: str,
+    user_answer: str,
+    topic: str = "",
+    profile: dict | None = None,
+) -> str:
+    resolved_key = ""
+    if provider != "ollama":
+        resolved_key = resolve_api_key(provider, api_key)
+    prompt = build_followup_generate_prompt(original_question, user_answer, topic, profile)
+    text = await _call_chat_text_with_fallback(
+        client,
+        provider,
+        resolved_key,
+        model,
+        FOLLOWUP_GEN_SYSTEM,
+        [{"role": "user", "content": prompt}],
+        temperature=0.45,
+        max_tokens=220,
+        label="followup-gen",
+    )
+    return _strip_followup_question(text) or (
+        "You touched on several points — pick one sentence from your answer and unpack it: what did you mean, and how did it play out in practice?"
+    )
+
+
+async def evaluate_followup_with_provider(
+    client: httpx.AsyncClient,
+    provider: str,
+    api_key: str,
+    model: str,
+    original_question: str,
+    follow_up_question: str,
+    answer: str,
+    profile: dict | None = None,
+) -> dict:
+    resolved_key = ""
+    if provider != "ollama":
+        resolved_key = resolve_api_key(provider, api_key)
+    prompt = build_followup_eval_prompt(original_question, follow_up_question, answer)
+    text = await _call_chat_text_with_fallback(
+        client,
+        provider,
+        resolved_key,
+        model,
+        FOLLOWUP_EVAL_SYSTEM,
+        [{"role": "user", "content": prompt}],
+        temperature=0.2,
+        max_tokens=256,
+        label="followup-eval",
+    )
+    parsed = parse_followup_eval_json(text)
+    if not parsed:
+        raise ProviderResponseError("Follow-up evaluation returned unparseable output")
+    return parsed
+
+
 # ─── Question generation ──────────────────────────────────
 
 def build_question_gen_prompt(topic: str, count: int) -> str:
